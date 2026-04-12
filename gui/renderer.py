@@ -33,7 +33,19 @@ _TERRAIN_COLOR = {
     TERRAIN_DEN: COLOR_DEN,
 }
 
-# Piece abbreviations for placeholder rendering
+# Short labels drawn on every piece so the animal is always identifiable
+_PIECE_LABEL = {
+    Animal.RAT:      "Rat",
+    Animal.CAT:      "Cat",
+    Animal.DOG:      "Dog",
+    Animal.WOLF:     "Wolf",
+    Animal.LEOPARD:  "Leo",
+    Animal.TIGER:    "Tig",
+    Animal.LION:     "Lion",
+    Animal.ELEPHANT: "Ele",
+}
+
+# Abbreviations kept for the fallback placeholder circle (no sprite)
 _ABBREV = {
     Animal.RAT: "Ra", Animal.CAT: "Ca", Animal.DOG: "Do",
     Animal.WOLF: "Wo", Animal.LEOPARD: "Le", Animal.TIGER: "Ti",
@@ -262,6 +274,27 @@ class Renderer:
                 animal = piece_id_animal(pid)
                 self._draw_piece(c, r, color, animal, selected == (c, r))
 
+    def _draw_outlined_text(
+        self,
+        text: str,
+        font: pygame.font.Font,
+        cx: int,
+        cy: int,
+        fg: tuple,
+        outline: tuple,
+        outline_width: int = 1,
+    ) -> None:
+        """Draw text centered at (cx, cy) with a solid outline for readability."""
+        for dx in range(-outline_width, outline_width + 1):
+            for dy in range(-outline_width, outline_width + 1):
+                if dx == 0 and dy == 0:
+                    continue
+                s = font.render(text, True, outline)
+                self.surface.blit(s, (cx - s.get_width() // 2 + dx,
+                                      cy - s.get_height() // 2 + dy))
+        s = font.render(text, True, fg)
+        self.surface.blit(s, (cx - s.get_width() // 2, cy - s.get_height() // 2))
+
     def _draw_piece(
         self,
         col: int, row: int,
@@ -284,13 +317,32 @@ class Renderer:
             pygame.draw.circle(self.surface, (200, 200, 200), (cx, cy), radius, 2)
 
             abbrev = _ABBREV[animal]
-            text_color = COLOR_TEXT_LIGHT
-            surf = self._font_piece.render(abbrev, True, text_color)
+            surf = self._font_piece.render(abbrev, True, COLOR_TEXT_LIGHT)
             self.surface.blit(surf, (cx - surf.get_width() // 2, cy - surf.get_height() // 2))
 
-        # Rank number in corner
-        rank_surf = self._font_small.render(str(int(animal)), True, (255, 255, 255))
-        self.surface.blit(rank_surf, (rect.x + 3, rect.y + 3))
+        # --- Animal name label at bottom of cell ---
+        # White text with dark outline so it reads on any terrain/piece color.
+        label = _PIECE_LABEL[animal]
+        label_y = rect.bottom - self._font_label.get_height() - 1
+        self._draw_outlined_text(
+            label, self._font_label,
+            cx, label_y,
+            fg=(255, 255, 255),
+            outline=(0, 0, 0),
+            outline_width=1,
+        )
+
+        # Rank badge: small circle in top-left with number
+        rank = int(animal)
+        badge_x = rect.x + 3
+        badge_y = rect.y + 3
+        badge_r = 8
+        badge_color = (60, 120, 220) if color == Color.BLUE else (50, 50, 60)
+        pygame.draw.circle(self.surface, badge_color, (badge_x + badge_r, badge_y + badge_r), badge_r)
+        pygame.draw.circle(self.surface, (200, 200, 200), (badge_x + badge_r, badge_y + badge_r), badge_r, 1)
+        rank_surf = self._font_small.render(str(rank), True, (255, 255, 255))
+        self.surface.blit(rank_surf, (badge_x + badge_r - rank_surf.get_width() // 2,
+                                      badge_y + badge_r - rank_surf.get_height() // 2))
 
     # ------------------------------------------------------------------
     # Side panel
