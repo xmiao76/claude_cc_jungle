@@ -8,7 +8,7 @@ from enum import Enum, auto
 import pygame
 
 from config import (
-    WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, FPS,
+    WINDOW_TITLE, FPS,
     DIFFICULTY_LABELS, AI_TIME_HARD_MS,
     AI_MOVE_EVENT_TYPE,
 )

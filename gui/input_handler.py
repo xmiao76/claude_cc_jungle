@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from config import COLS, ROWS, CELL_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y
+import config as _config
+from config import COLS, ROWS, BOARD_OFFSET_X, BOARD_OFFSET_Y
 from engine.board import Move
 from engine.pieces import Color, piece_id_color
 
 
 def pixel_to_board(px: int, py: int) -> tuple[int, int] | None:
     """Convert pixel coordinates to (col, row). Returns None if outside board."""
-    col = (px - BOARD_OFFSET_X) // CELL_SIZE
-    row = (py - BOARD_OFFSET_Y) // CELL_SIZE
+    col = (px - BOARD_OFFSET_X) // _config.CELL_SIZE
+    row = (py - BOARD_OFFSET_Y) // _config.CELL_SIZE
     if 0 <= col < COLS and 0 <= row < ROWS:
         return col, row
     return None

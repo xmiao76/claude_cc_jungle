@@ -11,15 +11,16 @@ import os
 
 import pygame
 
+import config as _config  # imported as module so _config.CELL_SIZE etc. are read dynamically
 from config import (
-    COLS, ROWS, CELL_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y,
+    COLS, ROWS, BOARD_OFFSET_X, BOARD_OFFSET_Y,
     TERRAIN_LAND, TERRAIN_RIVER, TERRAIN_TRAP, TERRAIN_DEN,
     TERRAIN,
     COLOR_LAND, COLOR_RIVER, COLOR_TRAP, COLOR_DEN, COLOR_GRID,
     COLOR_HIGHLIGHT_SELECT, COLOR_HIGHLIGHT_MOVE, COLOR_CAPTURE_FLASH,
     COLOR_BLUE_PIECE, COLOR_BLACK_PIECE, COLOR_TEXT_LIGHT, COLOR_TEXT_DARK,
     COLOR_PANEL_BG, COLOR_BG,
-    PANEL_WIDTH, WINDOW_WIDTH, WINDOW_HEIGHT, CAPTURE_FLASH_MS,
+    PANEL_WIDTH, CAPTURE_FLASH_MS,
     asset_path,
 )
 from engine.pieces import Animal, Color, piece_id_color, piece_id_animal, ANIMAL_NAMES
@@ -41,9 +42,9 @@ _ABBREV = {
 
 
 def _cell_rect(col: int, row: int) -> pygame.Rect:
-    x = BOARD_OFFSET_X + col * CELL_SIZE
-    y = BOARD_OFFSET_Y + row * CELL_SIZE
-    return pygame.Rect(x, y, CELL_SIZE, CELL_SIZE)
+    x = BOARD_OFFSET_X + col * _config.CELL_SIZE
+    y = BOARD_OFFSET_Y + row * _config.CELL_SIZE
+    return pygame.Rect(x, y, _config.CELL_SIZE, _config.CELL_SIZE)
 
 
 def _pixel_center(col: int, row: int) -> tuple[int, int]:
@@ -98,7 +99,7 @@ class Renderer:
                 try:
                     img = pygame.image.load(path).convert_alpha()
                     self._tile_cache[terrain_id] = pygame.transform.smoothscale(
-                        img, (CELL_SIZE, CELL_SIZE)
+                        img, (_config.CELL_SIZE, _config.CELL_SIZE)
                     )
                 except Exception:
                     self._tile_cache[terrain_id] = None
@@ -114,7 +115,7 @@ class Renderer:
                 if os.path.exists(path):
                     try:
                         img = pygame.image.load(path).convert_alpha()
-                        size = int(CELL_SIZE * 0.78)
+                        size = int(_config.CELL_SIZE * 0.78)
                         self._sprites[(animal, color)] = pygame.transform.smoothscale(
                             img, (size, size)
                         )
@@ -165,7 +166,7 @@ class Renderer:
                     if terrain == TERRAIN_DEN:
                         # Draw crown symbol
                         center = rect.center
-                        pygame.draw.circle(self.surface, (255, 220, 0), center, CELL_SIZE // 3, 3)
+                        pygame.draw.circle(self.surface, (255, 220, 0), center, _config.CELL_SIZE // 3, 3)
                     elif terrain == TERRAIN_TRAP:
                         # Draw X
                         m = 8
@@ -178,30 +179,30 @@ class Renderer:
 
     def _draw_grid(self) -> None:
         for c in range(COLS + 1):
-            x = BOARD_OFFSET_X + c * CELL_SIZE
+            x = BOARD_OFFSET_X + c * _config.CELL_SIZE
             pygame.draw.line(self.surface, COLOR_GRID,
                              (x, BOARD_OFFSET_Y),
-                             (x, BOARD_OFFSET_Y + ROWS * CELL_SIZE), 1)
+                             (x, BOARD_OFFSET_Y + ROWS * _config.CELL_SIZE), 1)
         for r in range(ROWS + 1):
-            y = BOARD_OFFSET_Y + r * CELL_SIZE
+            y = BOARD_OFFSET_Y + r * _config.CELL_SIZE
             pygame.draw.line(self.surface, COLOR_GRID,
                              (BOARD_OFFSET_X, y),
-                             (BOARD_OFFSET_X + COLS * CELL_SIZE, y), 1)
+                             (BOARD_OFFSET_X + COLS * _config.CELL_SIZE, y), 1)
 
     def _draw_board_labels(self) -> None:
         # Column labels A-G
         for c in range(COLS):
             label = chr(ord('A') + c)
             surf = self._font_label.render(label, True, (180, 180, 180))
-            x = BOARD_OFFSET_X + c * CELL_SIZE + CELL_SIZE // 2 - surf.get_width() // 2
-            y = BOARD_OFFSET_Y + ROWS * CELL_SIZE + 4
+            x = BOARD_OFFSET_X + c * _config.CELL_SIZE + _config.CELL_SIZE // 2 - surf.get_width() // 2
+            y = BOARD_OFFSET_Y + ROWS * _config.CELL_SIZE + 4
             self.surface.blit(surf, (x, y))
         # Row labels 1-9
         for r in range(ROWS):
             label = str(r + 1)
             surf = self._font_label.render(label, True, (180, 180, 180))
             x = BOARD_OFFSET_X - surf.get_width() - 4
-            y = BOARD_OFFSET_Y + r * CELL_SIZE + CELL_SIZE // 2 - surf.get_height() // 2
+            y = BOARD_OFFSET_Y + r * _config.CELL_SIZE + _config.CELL_SIZE // 2 - surf.get_height() // 2
             self.surface.blit(surf, (x, y))
 
     # ------------------------------------------------------------------
@@ -221,9 +222,9 @@ class Renderer:
         # Legal move targets: semi-transparent green circle
         for (c, r) in legal_targets:
             center = _pixel_center(c, r)
-            dot_surf = pygame.Surface((CELL_SIZE, CELL_SIZE), pygame.SRCALPHA)
-            pygame.draw.circle(dot_surf, (100, 230, 100, 120), (CELL_SIZE // 2, CELL_SIZE // 2),
-                               CELL_SIZE // 4)
+            dot_surf = pygame.Surface((_config.CELL_SIZE, _config.CELL_SIZE), pygame.SRCALPHA)
+            pygame.draw.circle(dot_surf, (100, 230, 100, 120), (_config.CELL_SIZE // 2, _config.CELL_SIZE // 2),
+                               _config.CELL_SIZE // 4)
             self.surface.blit(dot_surf, _cell_rect(c, r))
 
     # ------------------------------------------------------------------
@@ -238,7 +239,7 @@ class Renderer:
         for (c, r), end_ms in self._flashes.items():
             if tick_ms < end_ms:
                 rect = _cell_rect(c, r)
-                flash_surf = pygame.Surface((CELL_SIZE, CELL_SIZE), pygame.SRCALPHA)
+                flash_surf = pygame.Surface((_config.CELL_SIZE, _config.CELL_SIZE), pygame.SRCALPHA)
                 alpha = int(180 * (end_ms - tick_ms) / CAPTURE_FLASH_MS)
                 flash_surf.fill((220, 50, 50, alpha))
                 self.surface.blit(flash_surf, rect)
@@ -278,7 +279,7 @@ class Renderer:
         else:
             # Placeholder: colored circle with abbreviated name
             piece_color = COLOR_BLUE_PIECE if color == Color.BLUE else COLOR_BLACK_PIECE
-            radius = CELL_SIZE // 2 - 6
+            radius = _config.CELL_SIZE // 2 - 6
             pygame.draw.circle(self.surface, piece_color, (cx, cy), radius)
             pygame.draw.circle(self.surface, (200, 200, 200), (cx, cy), radius, 2)
 
@@ -296,8 +297,8 @@ class Renderer:
     # ------------------------------------------------------------------
 
     def _draw_panel(self, state, ai_thinking: bool, tick_ms: int) -> None:
-        panel_x = BOARD_OFFSET_X + COLS * CELL_SIZE + 20
-        panel_rect = pygame.Rect(panel_x, 0, PANEL_WIDTH, WINDOW_HEIGHT)
+        panel_x = BOARD_OFFSET_X + COLS * _config.CELL_SIZE + 20
+        panel_rect = pygame.Rect(panel_x, 0, PANEL_WIDTH, _config.WINDOW_HEIGHT)
         pygame.draw.rect(self.surface, COLOR_PANEL_BG, panel_rect)
 
         y = 30
@@ -364,12 +365,12 @@ class Renderer:
         hover_quit: bool,
     ) -> tuple[pygame.Rect, pygame.Rect]:
         """Draw win overlay. Returns (replay_btn_rect, quit_btn_rect)."""
-        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        overlay = pygame.Surface((_config.WINDOW_WIDTH, _config.WINDOW_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 160))
         surface.blit(overlay, (0, 0))
 
-        cx = WINDOW_WIDTH // 2
-        cy = WINDOW_HEIGHT // 2
+        cx = _config.WINDOW_WIDTH // 2
+        cy = _config.WINDOW_HEIGHT // 2
 
         if winner is not None:
             wname = "Blue" if winner == Color.BLUE else "Black"
@@ -419,8 +420,8 @@ class Renderer:
         """Draw main menu. Returns (hva_rect, ava_rect, diff_rect)."""
         surface.fill((20, 30, 20))
 
-        cx = WINDOW_WIDTH // 2
-        cy = WINDOW_HEIGHT // 2
+        cx = _config.WINDOW_WIDTH // 2
+        cy = _config.WINDOW_HEIGHT // 2
 
         # Title
         title = self._font_big.render("JUNGLE", True, (220, 180, 60))
