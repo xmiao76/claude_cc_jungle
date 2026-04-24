@@ -47,6 +47,7 @@ PyInstaller ^
     --add-data "gui\assets;gui\assets" ^
     --add-data "gui\assets\tiles;gui\assets\tiles" ^
     --add-data "gui\assets\pieces;gui\assets\pieces" ^
+    --add-data "gui\assets\sounds;gui\assets\sounds" ^
     main.py
 
 if errorlevel 1 (

@@ -89,6 +89,14 @@ class Renderer:
         # AI thinking spinner state
         self._spinner_angle = 0.0
 
+        # In-flight piece animations: list of dicts
+        # {animal, color, fc, fr, tc, tr, start_ms, duration_ms}
+        self._animations: list[dict] = []
+
+        # Last computed UI rects (for hit-testing in controller)
+        self.undo_button_rect: pygame.Rect | None = None
+        self.mute_button_rect: pygame.Rect | None = None
+
     # ------------------------------------------------------------------
     # Asset loading (called once after pygame.display is set)
     # ------------------------------------------------------------------
@@ -147,16 +155,20 @@ class Renderer:
         legal_targets: set[tuple[int, int]],
         ai_thinking: bool,
         tick_ms: int,
+        undo_enabled: bool = False,
+        muted: bool = False,
     ) -> None:
         """Redraw the entire frame."""
         self.surface.fill(COLOR_BG)
         self._draw_board_terrain()
         self._draw_highlights(selected, legal_targets)
         self._draw_capture_flashes(tick_ms)
-        self._draw_pieces(state.board, selected)
+        animating_squares = {(a["fc"], a["fr"]) for a in self._animations}
+        self._draw_pieces(state.board, selected, skip=animating_squares)
+        self._draw_animations(tick_ms)
         self._draw_grid()
         self._draw_board_labels()
-        self._draw_panel(state, ai_thinking, tick_ms)
+        self._draw_panel(state, ai_thinking, tick_ms, undo_enabled, muted)
 
     # ------------------------------------------------------------------
     # Board terrain
@@ -264,9 +276,17 @@ class Renderer:
     # Pieces
     # ------------------------------------------------------------------
 
-    def _draw_pieces(self, board, selected: tuple[int, int] | None) -> None:
+    def _draw_pieces(
+        self,
+        board,
+        selected: tuple[int, int] | None,
+        skip: set[tuple[int, int]] | None = None,
+    ) -> None:
+        skip = skip or set()
         for c in range(COLS):
             for r in range(ROWS):
+                if (c, r) in skip:
+                    continue
                 pid = board.get(c, r)
                 if pid == 0:
                     continue
@@ -345,10 +365,68 @@ class Renderer:
                                       badge_y + badge_r - rank_surf.get_height() // 2))
 
     # ------------------------------------------------------------------
+    # Animations
+    # ------------------------------------------------------------------
+
+    ANIM_DURATION_MS = 220
+
+    def start_move_animation(
+        self,
+        animal: Animal, color: Color,
+        fc: int, fr: int, tc: int, tr: int,
+        tick_ms: int,
+    ) -> None:
+        self._animations.append({
+            "animal": animal, "color": color,
+            "fc": fc, "fr": fr, "tc": tc, "tr": tr,
+            "start_ms": tick_ms, "duration_ms": self.ANIM_DURATION_MS,
+        })
+
+    def has_active_animation(self, tick_ms: int) -> bool:
+        return any(tick_ms < a["start_ms"] + a["duration_ms"] for a in self._animations)
+
+    def _draw_animations(self, tick_ms: int) -> None:
+        active: list[dict] = []
+        for a in self._animations:
+            elapsed = tick_ms - a["start_ms"]
+            if elapsed >= a["duration_ms"]:
+                continue
+            t = elapsed / a["duration_ms"]
+            t = 1 - (1 - t) * (1 - t)   # easeOutQuad
+            fx, fy = _pixel_center(a["fc"], a["fr"])
+            tx, ty = _pixel_center(a["tc"], a["tr"])
+            cx = int(fx + (tx - fx) * t)
+            cy = int(fy + (ty - fy) * t)
+            self._draw_floating_piece(cx, cy, a["color"], a["animal"])
+            active.append(a)
+        self._animations = active
+
+    def _draw_floating_piece(self, cx: int, cy: int, color: Color, animal: Animal) -> None:
+        sprite = self._sprites.get((animal, color))
+        if sprite:
+            self.surface.blit(sprite, (cx - sprite.get_width() // 2,
+                                       cy - sprite.get_height() // 2))
+        else:
+            piece_color = COLOR_BLUE_PIECE if color == Color.BLUE else COLOR_BLACK_PIECE
+            radius = _config.CELL_SIZE // 2 - 6
+            pygame.draw.circle(self.surface, piece_color, (cx, cy), radius)
+            pygame.draw.circle(self.surface, (200, 200, 200), (cx, cy), radius, 2)
+            abbrev = _ABBREV[animal]
+            surf = self._font_piece.render(abbrev, True, COLOR_TEXT_LIGHT)
+            self.surface.blit(surf, (cx - surf.get_width() // 2, cy - surf.get_height() // 2))
+
+    # ------------------------------------------------------------------
     # Side panel
     # ------------------------------------------------------------------
 
-    def _draw_panel(self, state, ai_thinking: bool, tick_ms: int) -> None:
+    def _draw_panel(
+        self,
+        state,
+        ai_thinking: bool,
+        tick_ms: int,
+        undo_enabled: bool = False,
+        muted: bool = False,
+    ) -> None:
         panel_x = BOARD_OFFSET_X + COLS * _config.CELL_SIZE + 20
         panel_rect = pygame.Rect(panel_x, 0, PANEL_WIDTH, _config.WINDOW_HEIGHT)
         pygame.draw.rect(self.surface, COLOR_PANEL_BG, panel_rect)
@@ -393,6 +471,45 @@ class Renderer:
         # Move count
         moves_surf = self._font_small.render(f"Move #{len(state.history)}", True, (140, 140, 140))
         self.surface.blit(moves_surf, (panel_x + 10, y))
+        y += 30
+
+        # --- Move history (last 8) ---
+        hist_title = self._font_small.render("History:", True, (200, 200, 200))
+        self.surface.blit(hist_title, (panel_x + 10, y))
+        y += 20
+        try:
+            entries = state.formatted_history(8)
+        except Exception:
+            entries = []
+        for line in entries:
+            surf = self._font_small.render(line, True, (170, 170, 170))
+            self.surface.blit(surf, (panel_x + 10, y))
+            y += 17
+
+        # --- Buttons at bottom of panel ---
+        btn_y = _config.WINDOW_HEIGHT - 90
+        undo_rect = pygame.Rect(panel_x + 10, btn_y, PANEL_WIDTH - 30, 32)
+        undo_color = (70, 90, 120) if undo_enabled else (50, 50, 60)
+        pygame.draw.rect(self.surface, undo_color, undo_rect, border_radius=6)
+        pygame.draw.rect(self.surface, (140, 140, 180), undo_rect, 1, border_radius=6)
+        ulabel = self._font_small.render(
+            "Undo (U)" if undo_enabled else "Undo (-)",
+            True, (220, 220, 220) if undo_enabled else (130, 130, 130),
+        )
+        self.surface.blit(ulabel, (undo_rect.centerx - ulabel.get_width() // 2,
+                                   undo_rect.centery - ulabel.get_height() // 2))
+        self.undo_button_rect = undo_rect
+
+        mute_rect = pygame.Rect(panel_x + 10, btn_y + 40, PANEL_WIDTH - 30, 32)
+        pygame.draw.rect(self.surface, (60, 60, 80), mute_rect, border_radius=6)
+        pygame.draw.rect(self.surface, (140, 140, 180), mute_rect, 1, border_radius=6)
+        mlabel = self._font_small.render(
+            "Sound: OFF (M)" if muted else "Sound: ON (M)",
+            True, (220, 220, 220),
+        )
+        self.surface.blit(mlabel, (mute_rect.centerx - mlabel.get_width() // 2,
+                                   mute_rect.centery - mlabel.get_height() // 2))
+        self.mute_button_rect = mute_rect
 
     def _draw_spinner(self, x: int, y: int, tick_ms: int) -> None:
         cx, cy = x + 14, y + 14
@@ -468,6 +585,8 @@ class Renderer:
         hover_ava: bool,
         hover_diff: bool,
         difficulty_labels: list[str],
+        difficulty_subtext: list[str] | None = None,
+        version: str = "",
     ) -> tuple[pygame.Rect, pygame.Rect, pygame.Rect]:
         """Draw main menu. Returns (hva_rect, ava_rect, diff_rect)."""
         surface.fill((20, 30, 20))
@@ -498,7 +617,17 @@ class Renderer:
             surface.blit(lsurf, (rect.centerx - lsurf.get_width() // 2,
                                   rect.centery - lsurf.get_height() // 2))
 
-        hint = self._font_small.render("ESC: return to menu during game", True, (80, 80, 80))
-        surface.blit(hint, (cx - hint.get_width() // 2, cy + 140))
+        if difficulty_subtext:
+            sub_text = difficulty_subtext[difficulty]
+            sub_surf = self._font_small.render(sub_text, True, (170, 200, 170))
+            surface.blit(sub_surf, (cx - sub_surf.get_width() // 2, cy + 125))
+
+        hint = self._font_small.render("ESC: menu  |  U: undo  |  M: mute", True, (80, 80, 80))
+        surface.blit(hint, (cx - hint.get_width() // 2, cy + 155))
+
+        if version:
+            v_surf = self._font_small.render(f"v{version}", True, (60, 60, 60))
+            surface.blit(v_surf, (_config.WINDOW_WIDTH - v_surf.get_width() - 10,
+                                   _config.WINDOW_HEIGHT - v_surf.get_height() - 8))
 
         return hva_rect, ava_rect, diff_rect

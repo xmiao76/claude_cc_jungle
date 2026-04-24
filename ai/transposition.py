@@ -1,11 +1,15 @@
-"""Transposition table using Zobrist hashes."""
+"""Transposition table using Zobrist hashes.
+
+Replacement strategy: depth-prefer. A new entry only overwrites an existing
+entry of strictly greater depth; equal or shallower depths are replaced.
+On overflow the lowest-depth half is evicted.
+"""
 
 from __future__ import annotations
 
-# Flag constants for transposition table entries
-TT_EXACT = 0    # exact score
-TT_LOWER = 1    # lower bound (alpha cutoff)
-TT_UPPER = 2    # upper bound (beta cutoff)
+TT_EXACT = 0
+TT_LOWER = 1
+TT_UPPER = 2
 
 _MAX_ENTRIES = 1_000_000
 
@@ -29,12 +33,19 @@ class TranspositionTable:
         return self._table.get(key)
 
     def put(self, key: int, depth: int, score: int, flag: int, best_move) -> None:
-        if len(self._table) >= self._max:
-            # Simple eviction: clear half the table (remove oldest entries)
-            keys = list(self._table.keys())
-            for k in keys[: self._max // 2]:
-                del self._table[k]
+        existing = self._table.get(key)
+        if existing is not None and existing.depth > depth:
+            return  # keep deeper analysis
+        if existing is None and len(self._table) >= self._max:
+            self._evict_low_depth()
         self._table[key] = TTEntry(depth, score, flag, best_move)
+
+    def _evict_low_depth(self) -> None:
+        # Sort by depth ascending; drop the lowest half.
+        items = sorted(self._table.items(), key=lambda kv: kv[1].depth)
+        cut = self._max // 2
+        for k, _ in items[:cut]:
+            del self._table[k]
 
     def clear(self) -> None:
         self._table.clear()

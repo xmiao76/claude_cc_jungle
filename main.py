@@ -7,6 +7,10 @@ from controller import Controller
 
 def main() -> None:
     pygame.init()
+    try:
+        pygame.mixer.init()
+    except Exception:
+        pass   # game still works without audio
     pygame.display.set_caption(config.WINDOW_TITLE)
 
     # Register custom event type for AI move results

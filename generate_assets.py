@@ -18,9 +18,11 @@ SPRITE_INNER = 62  # drawable area within piece PNG
 
 OUTPUT_TILES = os.path.join("gui", "assets", "tiles")
 OUTPUT_PIECES = os.path.join("gui", "assets", "pieces")
+OUTPUT_SOUNDS = os.path.join("gui", "assets", "sounds")
 
 os.makedirs(OUTPUT_TILES, exist_ok=True)
 os.makedirs(OUTPUT_PIECES, exist_ok=True)
+os.makedirs(OUTPUT_SOUNDS, exist_ok=True)
 
 pygame.init()
 # Offscreen surface for drawing
@@ -496,6 +498,71 @@ def make_icon() -> pygame.Surface:
 # Main generation
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Sound generation (procedural PCM WAV)
+# ---------------------------------------------------------------------------
+
+def _write_wav(path: str, samples, sample_rate: int = 22050) -> None:
+    """Write a mono 16-bit PCM WAV from an iterable of float samples in [-1, 1]."""
+    import wave
+    import struct
+    pcm = bytearray()
+    for s in samples:
+        v = max(-1.0, min(1.0, s))
+        pcm += struct.pack("<h", int(v * 32767))
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(bytes(pcm))
+
+
+def make_move_sound(path: str) -> None:
+    """Soft wood-block click: short decaying sine burst."""
+    sr = 22050
+    dur = 0.07
+    n = int(sr * dur)
+    freq = 520.0
+    samples = []
+    for i in range(n):
+        t = i / sr
+        env = math.exp(-t * 35)
+        samples.append(0.45 * env * math.sin(2 * math.pi * freq * t))
+    _write_wav(path, samples, sr)
+
+
+def make_capture_sound(path: str) -> None:
+    """Thud + crunch: low sine + filtered noise."""
+    import random
+    sr = 22050
+    dur = 0.18
+    n = int(sr * dur)
+    rng = random.Random(7)
+    samples = []
+    for i in range(n):
+        t = i / sr
+        env = math.exp(-t * 14)
+        sine = math.sin(2 * math.pi * 160 * t) * 0.55
+        noise = (rng.random() * 2 - 1) * 0.35 * math.exp(-t * 30)
+        samples.append(env * sine + noise)
+    _write_wav(path, samples, sr)
+
+
+def make_win_sound(path: str) -> None:
+    """Three-note ascending fanfare (C-E-G)."""
+    sr = 22050
+    notes = [(523.25, 0.18), (659.25, 0.18), (784.0, 0.34)]
+    samples = []
+    for freq, dur in notes:
+        n = int(sr * dur)
+        for i in range(n):
+            t = i / sr
+            env = math.exp(-t * 3.5)
+            samples.append(0.4 * env * (math.sin(2 * math.pi * freq * t)
+                                        + 0.3 * math.sin(2 * math.pi * freq * 2 * t)))
+    _write_wav(path, samples, sr)
+
+
 def generate_all():
     print("Generating terrain tiles...")
     tiles = {
@@ -526,6 +593,17 @@ def generate_all():
             path = os.path.join(OUTPUT_PIECES, f"{animal_name}_{color_name}.png")
             pygame.image.save(s, path)
             print(f"  Saved {path}")
+
+    print("\nGenerating sound effects...")
+    sounds = {
+        "move.wav":    make_move_sound,
+        "capture.wav": make_capture_sound,
+        "win.wav":     make_win_sound,
+    }
+    for fname, fn in sounds.items():
+        path = os.path.join(OUTPUT_SOUNDS, fname)
+        fn(path)
+        print(f"  Saved {path}")
 
     print("\nAll assets generated successfully!")
 

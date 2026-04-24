@@ -62,6 +62,49 @@ def test_undo_restores_captured_piece():
 # Test: Turn alternates correctly
 # ---------------------------------------------------------------------------
 
+def test_starting_position_layout():
+    """Initial layout: Lion/Tiger fixed at corners; rows 1-2 / 6-7 are
+    top-to-bottom mirrors so each player's Elephant sits on their own left side
+    (Black Elephant col 6, Blue Elephant col 0)."""
+    from engine.pieces import (
+        Animal, Color, make_piece_id,
+        piece_id_color, piece_id_animal,
+    )
+    expected = {
+        # Black (top)
+        (0, 0): (Color.BLACK, Animal.LION),
+        (6, 0): (Color.BLACK, Animal.TIGER),
+        (1, 1): (Color.BLACK, Animal.DOG),
+        (5, 1): (Color.BLACK, Animal.CAT),
+        (0, 2): (Color.BLACK, Animal.RAT),
+        (2, 2): (Color.BLACK, Animal.LEOPARD),
+        (4, 2): (Color.BLACK, Animal.WOLF),
+        (6, 2): (Color.BLACK, Animal.ELEPHANT),
+        # Blue (bottom)
+        (0, 6): (Color.BLUE, Animal.ELEPHANT),
+        (2, 6): (Color.BLUE, Animal.WOLF),
+        (4, 6): (Color.BLUE, Animal.LEOPARD),
+        (6, 6): (Color.BLUE, Animal.RAT),
+        (1, 7): (Color.BLUE, Animal.CAT),
+        (5, 7): (Color.BLUE, Animal.DOG),
+        (0, 8): (Color.BLUE, Animal.TIGER),
+        (6, 8): (Color.BLUE, Animal.LION),
+    }
+    gs = GameState()
+    gs.new_game()
+    for (c, r), (color, animal) in expected.items():
+        pid = gs.board.get(c, r)
+        assert pid != 0, f"({c},{r}) is empty; expected {color.name} {animal.name}"
+        assert piece_id_color(pid) == color and piece_id_animal(pid) == animal, (
+            f"({c},{r}) has wrong piece: got "
+            f"{piece_id_color(pid).name} {piece_id_animal(pid).name}, "
+            f"expected {color.name} {animal.name}"
+        )
+    # No extra pieces beyond the 16 expected
+    total = sum(1 for c in range(7) for r in range(9) if gs.board.get(c, r) != 0)
+    assert total == 16, f"expected 16 pieces, got {total}"
+
+
 def test_turn_alternates():
     gs = GameState()
     gs.new_game()

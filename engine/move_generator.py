@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from config import (
-    COLS, ROWS, TERRAIN, TERRAIN_RIVER, TERRAIN_DEN,
-    DEN_BLACK, DEN_BLUE, RIVER_1, RIVER_2,
+    COLS, ROWS, TERRAIN, TERRAIN_RIVER,
+    DEN_BLACK, DEN_BLUE,
 )
 from engine.board import Board, Move
 from engine.pieces import Animal, Color, piece_id_color, piece_id_animal
@@ -21,32 +21,11 @@ _JUMP_TABLE: dict[tuple[int, int], list[tuple[int, int, int, int]]] = {}
 
 
 def _build_jump_table() -> None:
-    """Precompute all valid river-jump endpoints for Lion and Tiger."""
-    river_blocks = [RIVER_1, RIVER_2]
-    for river in river_blocks:
-        # Find all squares adjacent to this river block (not in river)
-        for (c, r) in river:
-            for (dc, dr) in _DIRS:
-                nc, nr = c + dc, r + dr
-                if not (0 <= nc < COLS and 0 <= nr < ROWS):
-                    continue
-                if (nc, nr) in river:
-                    continue
-                # (nc, nr) is a land square adjacent to the river.
-                # Follow direction (dc, dr) from (nc, nr) across the river.
-                lc, lr = nc - dc, nr - dr  # step back into river
-                # Follow *back through* the river to find landing
-                # Actually: from (nc,nr) in direction (-dc,-dr) we entered.
-                # The jump direction is the SAME direction that got us here.
-                # Jump starts at (nc, nr), goes in direction (dc, dr) but
-                # wait — we want: piece at (nc, nr) jumps over river in
-                # direction (dc, dr) is INTO the river... Let me recompute.
-                # We want jumps FROM a land square, through the river, to a land square.
-                # Scan: start at land square, move in direction, skip water squares.
-                pass
+    """Precompute all valid river-jump endpoints for Lion and Tiger.
 
-    # Correct approach: for each land square adjacent to river, try all 4 directions
-    all_river = RIVER_1 | RIVER_2
+    For each land square adjacent to a river, follow each cardinal direction
+    through the river to the first non-river square; that pair forms a jump.
+    """
     for c in range(COLS):
         for r in range(ROWS):
             if TERRAIN[c][r] == TERRAIN_RIVER:
@@ -57,8 +36,6 @@ def _build_jump_table() -> None:
                     continue
                 if TERRAIN[nc][nr] != TERRAIN_RIVER:
                     continue
-                # We have a river square adjacent in direction (dc,dr).
-                # Follow the river to find the landing square.
                 lc, lr = nc, nr
                 while (0 <= lc < COLS and 0 <= lr < ROWS and
                        TERRAIN[lc][lr] == TERRAIN_RIVER):
@@ -68,22 +45,36 @@ def _build_jump_table() -> None:
                     continue
                 if TERRAIN[lc][lr] == TERRAIN_RIVER:
                     continue
-                # Valid jump: (c,r) → (lc,lr) in direction (dc,dr)
-                entry = _JUMP_TABLE.setdefault((c, r), [])
-                # Store: direction + landing square
-                entry.append((dc, dr, lc, lr))
+                _JUMP_TABLE.setdefault((c, r), []).append((dc, dr, lc, lr))
 
 
 _build_jump_table()
 
 
 def _can_jump(animal: Animal, dc: int, dr: int) -> bool:
-    """Return True if this animal can make a river jump in the given direction."""
+    """Return True if this animal can leap a river crossing in direction (dc, dr).
+
+    The river has two crossings:
+      - "Horizontal" crossing = 2 river squares (column-axis leap, dc != 0).
+      - "Vertical"   crossing = 3 river squares (row-axis    leap, dr != 0).
+
+    Lion can leap up to 3 squares -> both crossings.
+    Tiger can leap up to 2 squares -> the horizontal crossing only.
+    """
     if animal == Animal.LION:
-        return True   # Lion jumps both horizontally and vertically
+        return True
     if animal == Animal.TIGER:
-        return dr != 0  # Tiger jumps vertically only (dr != 0 means vertical)
+        return dc != 0   # horizontal (2-square) jump only
     return False
+
+
+def is_capture(move: Move) -> bool:
+    return move.captured != 0
+
+
+def generate_capture_moves(board: Board, color: Color) -> list[Move]:
+    """Generate only capture moves — used by quiescence search."""
+    return [m for m in generate_legal_moves(board, color) if m.captured != 0]
 
 
 def generate_legal_moves(board: Board, color: Color) -> list[Move]:

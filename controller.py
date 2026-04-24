@@ -8,16 +8,17 @@ from enum import Enum, auto
 import pygame
 
 from config import (
-    WINDOW_TITLE, FPS,
-    DIFFICULTY_LABELS, AI_TIME_HARD_MS,
-    AI_MOVE_EVENT_TYPE,
+    FPS,
+    DIFFICULTY_LABELS, DIFFICULTY_SUBTEXT, AI_TIME_HARD_MS,
+    VERSION,
 )
 from engine.game_state import GameState
-from engine.pieces import Color
+from engine.pieces import Color, piece_id_color, piece_id_animal
 from engine.board import Move
 from ai.minimax import AIPlayer
 from gui.renderer import Renderer
 from gui.input_handler import InputHandler
+from gui.audio import Audio
 import config
 
 
@@ -37,34 +38,33 @@ class Controller:
         self.renderer = Renderer(surface)
         self.renderer.load_assets()
         self.input_handler = InputHandler()
+        self.audio = Audio()
 
         self.state = AppState.MENU
         self.gs = GameState()
-        self.difficulty = 1  # Medium default
-        self.mode_ava = False  # AI-vs-AI mode
+        self.difficulty = 1
+        self.mode_ava = False
 
-        # AI players (recreated when game starts)
         self._ai_blue: AIPlayer | None = None
         self._ai_black: AIPlayer | None = None
 
-        # Menu hover state
         self._hover_hva = False
         self._hover_ava = False
         self._hover_diff = False
 
-        # Game-over overlay hover
         self._hover_replay = False
         self._hover_quit = False
         self._replay_rect: pygame.Rect | None = None
         self._quit_rect: pygame.Rect | None = None
 
-        # Menu button rects (set after draw)
         self._menu_hva_rect: pygame.Rect | None = None
         self._menu_ava_rect: pygame.Rect | None = None
         self._menu_diff_rect: pygame.Rect | None = None
 
-        # Human always plays Blue
         self._human_color = Color.BLUE
+        # When True, the controller will start the AI thread once the current
+        # piece animation finishes. Lets the human see their move slide.
+        self._pending_ai_after_anim = False
 
         self._clock = pygame.time.Clock()
 
@@ -93,6 +93,10 @@ class Controller:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self._go_to_menu()
+                elif event.key == pygame.K_u:
+                    self._try_undo()
+                elif event.key == pygame.K_m:
+                    self.audio.toggle_mute()
 
             if event.type == config.AI_MOVE_EVENT_TYPE:
                 self._on_ai_move(event.move, tick_ms)
@@ -135,6 +139,14 @@ class Controller:
                 import sys; sys.exit(0)
             return
 
+        # In-game: side-panel buttons take priority
+        if self.renderer.undo_button_rect and self.renderer.undo_button_rect.collidepoint(mx, my):
+            self._try_undo()
+            return
+        if self.renderer.mute_button_rect and self.renderer.mute_button_rect.collidepoint(mx, my):
+            self.audio.toggle_mute()
+            return
+
         if self.state == AppState.HUMAN_TURN:
             move = self.input_handler.handle_click(mx, my, self.gs, self._human_color)
             if move is not None:
@@ -148,6 +160,7 @@ class Controller:
         self.mode_ava = ava
         self.gs.new_game()
         self.input_handler.reset()
+        self._pending_ai_after_anim = False
 
         self._ai_blue = AIPlayer(Color.BLUE, self.difficulty)
         self._ai_black = AIPlayer(Color.BLACK, self.difficulty)
@@ -179,23 +192,25 @@ class Controller:
         if move is None or self.gs.is_terminal():
             return
 
-        # Flash capture
         if move.captured:
             self.renderer.trigger_capture_flash(move.tc, move.tr, tick_ms)
+            self.audio.play("capture")
+        else:
+            self.audio.play("move")
 
+        self._begin_animation_for_move(move, tick_ms)
         self.gs.apply_move(move)
         self.input_handler.reset()
 
         if self.gs.is_terminal():
+            self.audio.play("win")
             self.state = AppState.GAME_OVER
             return
 
         if self.mode_ava:
-            # Continue AI-vs-AI
             self.state = AppState.AI_VS_AI_THINKING
             self._start_ai_thread(self.gs.turn)
         else:
-            # Human vs AI
             if self.gs.turn == self._human_color:
                 self.state = AppState.HUMAN_TURN
             else:
@@ -209,24 +224,78 @@ class Controller:
     def _apply_player_move(self, move: Move, tick_ms: int) -> None:
         if move.captured:
             self.renderer.trigger_capture_flash(move.tc, move.tr, tick_ms)
+            self.audio.play("capture")
+        else:
+            self.audio.play("move")
 
+        self._begin_animation_for_move(move, tick_ms)
         self.gs.apply_move(move)
         self.input_handler.reset()
 
         if self.gs.is_terminal():
+            self.audio.play("win")
             self.state = AppState.GAME_OVER
             return
 
-        # Start AI
+        # Defer AI start until the human's piece finishes sliding
         self.state = AppState.AI_THINKING
-        self._start_ai_thread(self.gs.turn)
+        self._pending_ai_after_anim = True
+
+    def _begin_animation_for_move(self, move: Move, tick_ms: int) -> None:
+        # Read the mover's pid BEFORE apply_move (caller hasn't applied yet)
+        pid = self.gs.board.get(move.fc, move.fr)
+        if pid == 0:
+            return
+        self.renderer.start_move_animation(
+            piece_id_animal(pid), piece_id_color(pid),
+            move.fc, move.fr, move.tc, move.tr, tick_ms,
+        )
+
+    # ------------------------------------------------------------------
+    # Undo
+    # ------------------------------------------------------------------
+
+    def _try_undo(self) -> None:
+        """Pop both AI and human plies so the human is on move again."""
+        if self.mode_ava:
+            return
+        if self.state not in (AppState.HUMAN_TURN, AppState.GAME_OVER):
+            return
+        # Need at least one full round (human + AI) to undo cleanly when in HUMAN_TURN,
+        # or one ply to roll back the game-over screen.
+        if not self.gs.history:
+            return
+        # Pop the AI's response (if any) first
+        if self.gs.turn == self._human_color and len(self.gs.history) >= 2:
+            self.gs.undo_move()
+            self.gs.undo_move()
+        else:
+            self.gs.undo_move()
+            if self.gs.history and self.gs.turn != self._human_color:
+                self.gs.undo_move()
+        self.input_handler.reset()
+        self.state = AppState.HUMAN_TURN
+        self._pending_ai_after_anim = False
+        self.renderer._animations.clear()
+
+    def _undo_enabled(self) -> bool:
+        return (
+            not self.mode_ava
+            and self.state == AppState.HUMAN_TURN
+            and len(self.gs.history) >= 2
+        )
 
     # ------------------------------------------------------------------
     # Update
     # ------------------------------------------------------------------
 
     def _update(self, tick_ms: int) -> None:
-        # If HUMAN_TURN but it's somehow AI's turn (shouldn't happen), fix it
+        # Defer AI thread start until the human's piece animation completes.
+        if self._pending_ai_after_anim and not self.renderer.has_active_animation(tick_ms):
+            self._pending_ai_after_anim = False
+            self._start_ai_thread(self.gs.turn)
+            return
+
         if self.state == AppState.HUMAN_TURN and self.gs.turn != self._human_color:
             self.state = AppState.AI_THINKING
             self._start_ai_thread(self.gs.turn)
@@ -244,6 +313,8 @@ class Controller:
                 self._hover_ava,
                 self._hover_diff,
                 DIFFICULTY_LABELS,
+                DIFFICULTY_SUBTEXT,
+                VERSION,
             )
             self._menu_hva_rect, self._menu_ava_rect, self._menu_diff_rect = rects
         else:
@@ -254,6 +325,8 @@ class Controller:
                 self.input_handler.legal_targets,
                 ai_thinking,
                 tick_ms,
+                undo_enabled=self._undo_enabled(),
+                muted=self.audio.muted,
             )
 
             if self.state == AppState.GAME_OVER:
@@ -273,3 +346,5 @@ class Controller:
     def _go_to_menu(self) -> None:
         self.state = AppState.MENU
         self.input_handler.reset()
+        self.renderer._animations.clear()
+        self._pending_ai_after_anim = False

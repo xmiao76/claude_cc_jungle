@@ -99,6 +99,41 @@ AI_DEPTH_MEDIUM = 4
 AI_TIME_HARD_MS = 2000   # iterative deepening time budget for Hard
 
 DIFFICULTY_LABELS = ["Easy", "Medium", "Hard"]
+DIFFICULTY_SUBTEXT = [
+    "2-ply search · instant",
+    "4-ply search · instant",
+    "iterative · ~2s",
+]
+
+# Material values per Animal rank (1=Rat .. 8=Elephant)
+PIECE_VALUES: dict[int, int] = {
+    1: 100,   # Rat
+    2: 200,   # Cat
+    3: 300,   # Dog
+    4: 400,   # Wolf
+    5: 500,   # Leopard
+    6: 600,   # Tiger
+    7: 700,   # Lion
+    8: 800,   # Elephant
+}
+
+# Positional evaluation weights (centralized for tuning)
+EVAL_WEIGHTS = {
+    "advancement_per_row": 10,
+    "den_proximity_max_dist": 3,
+    "den_proximity_per_step": 30,
+    "rat_in_water": 40,
+    "rat_adjacent_to_enemy_elephant": 60,
+    "trap_control": 80,
+}
+
+QUIESCENCE_MAX_PLY = 4    # cap on quiescence search depth
+
+# ---------------------------------------------------------------------------
+# Versioning
+# ---------------------------------------------------------------------------
+
+VERSION = "1.1"
 
 # ---------------------------------------------------------------------------
 # Custom pygame event IDs (registered at runtime)

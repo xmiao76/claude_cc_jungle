@@ -146,6 +146,26 @@ def test_ai_difficulties_distinct():
 # Test: Full AI-vs-AI game completes (in test_full_game.py, but quick version here)
 # ---------------------------------------------------------------------------
 
+def test_ai_quiescence_avoids_horizon_blunder():
+    """Quiescence regression: our Tiger (rank 6) is tempted to capture an
+    undefended-looking Wolf (rank 4) — but a Black Lion (rank 7) is one step
+    from recapturing. The AI must see through the depth-2 horizon and avoid
+    losing Tiger for Wolf."""
+    gs = make_gs(
+        (3, 4, Color.BLUE, Animal.TIGER),     # our attacker (rank 6)
+        (3, 5, Color.BLACK, Animal.WOLF),     # tempting victim (rank 4)
+        (3, 6, Color.BLACK, Animal.LION),     # defender (rank 7) > Tiger
+        (0, 8, Color.BLUE, Animal.RAT),       # filler
+        (6, 0, Color.BLACK, Animal.CAT),      # filler
+    )
+    gs.turn = Color.BLUE
+    ai = AIPlayer(Color.BLUE, difficulty=0)
+    move = ai.get_best_move(gs)
+    assert move is not None
+    bad = (move.fc, move.fr, move.tc, move.tr) == (3, 4, 3, 5)
+    assert not bad, "AI fell for the horizon trap (Tiger captured defended Wolf)"
+
+
 def test_ai_vs_ai_quick():
     """Two Easy AIs should be able to play a short game without crashing."""
     gs = GameState()

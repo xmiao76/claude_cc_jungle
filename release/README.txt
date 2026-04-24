@@ -1,6 +1,24 @@
 JUNGLE - THE BOARD GAME
 =======================
-Version 1.0 | Windows Desktop
+Version 1.1 | Windows Desktop
+
+
+AUTHORSHIP
+----------
+Designed and implemented by an AI coding agent (Anthropic's Claude Opus 4.7
+via Claude Code). The architecture, gameplay logic, AI engine, GUI, automated
+tests, and packaging were all generated programmatically; no third-party code
+was incorporated. Initial generation: 2026-04-23.
+
+WHAT'S NEW IN 1.1
+-----------------
+  - Undo button (and "U" hotkey): take back your last move and the AI's reply.
+  - Move history panel: see the last 8 moves at a glance.
+  - Smooth piece animations when moves are played.
+  - Sound effects for moves, captures, and wins (toggle with the Sound button or "M").
+  - Difficulty hint on the main menu so you know what each level does.
+  - Smarter AI: quiescence search at the depth horizon, killer-move and history
+    heuristics for sharper move ordering, depth-prefer transposition table.
 
 HOW TO LAUNCH
 -------------
@@ -42,8 +60,8 @@ TERRAIN
 
 SPECIAL MOVEMENT RULES
 -----------------------
-  Lion   : Can jump over an entire river horizontally OR vertically (blocked if a Rat is in the river)
-  Tiger  : Can jump over an entire river vertically only (blocked if a Rat is in the river)
+  Lion   : Can jump both river crossings - the 2-square horizontal AND the 3-square vertical (blocked by a Rat in the river path)
+  Tiger  : Can jump only the 2-square horizontal river crossing (blocked by a Rat in the river path)
   Rat    : The only piece that can swim (enter river squares)
            A Rat in the river cannot capture an Elephant on land
            A Rat on land cannot capture a Rat that is in the river
@@ -52,13 +70,13 @@ SPECIAL MOVEMENT RULES
 
 CONTROLS
 --------
-  Mouse only.
-
   Click your piece     - Selects the piece (gold border appears)
   Green dots           - Show all legal move destinations
   Click a green dot    - Move the selected piece there
   Click elsewhere      - Deselect the piece
   ESC key              - Return to the main menu
+  U key                - Undo (rolls back your move and the AI's reply)
+  M key                - Toggle sound on/off
 
 
 MAIN MENU
@@ -96,8 +114,7 @@ RULES REFERENCE
 Full rules are available at: https://en.wikipedia.org/wiki/Jungle_(board_game)
 
 Rule interpretations used in this implementation:
-  - Lion can jump both horizontally and vertically
-  - Tiger can only jump vertically
+  - Lion can jump both river crossings (2-square horizontal and 3-square vertical); Tiger can jump only the 2-square horizontal crossing
   - Rat in water cannot capture Elephant on land (and vice versa)
   - Rat in water cannot be captured by land pieces
   - Own traps do NOT reduce your own pieces' rank

@@ -2,31 +2,16 @@
 
 from __future__ import annotations
 
-from config import DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE, TERRAIN, TERRAIN_RIVER
-from engine.pieces import Animal, Color, piece_id_color, piece_id_animal, piece_id_rank
-from engine.move_generator import generate_legal_moves
-
-# ---------------------------------------------------------------------------
-# Material values
-# ---------------------------------------------------------------------------
-
-PIECE_VALUE: dict[Animal, int] = {
-    Animal.RAT: 100,
-    Animal.CAT: 200,
-    Animal.DOG: 300,
-    Animal.WOLF: 400,
-    Animal.LEOPARD: 500,
-    Animal.TIGER: 600,
-    Animal.LION: 700,
-    Animal.ELEPHANT: 800,
-}
-
-# ---------------------------------------------------------------------------
-# Den positions indexed by Color
-# ---------------------------------------------------------------------------
+from config import (
+    COLS, ROWS,
+    DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE,
+    TERRAIN, TERRAIN_RIVER,
+    PIECE_VALUES, EVAL_WEIGHTS,
+)
+from engine.pieces import Animal, Color, piece_id_animal
 
 _OPPONENT_DEN = {
-    Color.BLUE: DEN_BLACK,   # Blue's goal is Black's den
+    Color.BLUE: DEN_BLACK,
     Color.BLACK: DEN_BLUE,
 }
 
@@ -35,11 +20,11 @@ _OWN_DEN = {
     Color.BLACK: DEN_BLACK,
 }
 
-# ---------------------------------------------------------------------------
-# Evaluation
-# ---------------------------------------------------------------------------
-
 _INF = 10_000_000
+
+
+def _advancement(color: Color, row: int) -> int:
+    return (ROWS - 1 - row) if color == Color.BLUE else row
 
 
 def evaluate(state, color: Color) -> int:
@@ -47,7 +32,6 @@ def evaluate(state, color: Color) -> int:
     board = state.board
     opponent = Color.BLACK if color == Color.BLUE else Color.BLUE
 
-    # Terminal check
     winner = state.get_winner()
     if winner is not None:
         return _INF if winner == color else -_INF
@@ -57,61 +41,51 @@ def evaluate(state, color: Color) -> int:
     opp_den_c, opp_den_r = _OPPONENT_DEN[color]
     own_den_c, own_den_r = _OWN_DEN[color]
 
+    adv_w = EVAL_WEIGHTS["advancement_per_row"]
+    den_max = EVAL_WEIGHTS["den_proximity_max_dist"]
+    den_step = EVAL_WEIGHTS["den_proximity_per_step"]
+    rat_water = EVAL_WEIGHTS["rat_in_water"]
+    rat_near_ele = EVAL_WEIGHTS["rat_adjacent_to_enemy_elephant"]
+    trap_bonus = EVAL_WEIGHTS["trap_control"]
+
+    enemy_elephant_pid = -int(Animal.ELEPHANT) if color == Color.BLUE else int(Animal.ELEPHANT)
+
     my_pieces = board.pieces_of(color)
     opp_pieces = board.pieces_of(opponent)
 
-    # 1. Material + positional scores
+    # 1. Material + positional — own pieces
     for pid, (c, r) in my_pieces.items():
         animal = piece_id_animal(pid)
-        score += PIECE_VALUE[animal]
+        score += PIECE_VALUES[int(animal)]
+        score += _advancement(color, r) * adv_w
 
-        # Advancement toward opponent den (row-based)
-        if color == Color.BLUE:
-            adv = (8 - r)  # rows 0-8; closer to row 0 = more advanced
-        else:
-            adv = r         # closer to row 8 = more advanced
-
-        score += adv * 10
-
-        # Den proximity bonus
         dist = abs(c - opp_den_c) + abs(r - opp_den_r)
-        if dist <= 3:
-            score += (4 - dist) * 30
+        if dist <= den_max:
+            score += (den_max + 1 - dist) * den_step
 
-        # Rat strategic bonus: in water (blocks opponent jumps), near enemy elephant
         if animal == Animal.RAT:
             if TERRAIN[c][r] == TERRAIN_RIVER:
-                score += 40
-            # Check if adjacent to opponent Elephant
-            ele_pid = -Animal.ELEPHANT if color == Color.BLUE else Animal.ELEPHANT
-            for dc, dr in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                score += rat_water
+            for dc, dr in ((0, 1), (0, -1), (1, 0), (-1, 0)):
                 nc, nr = c + dc, r + dr
-                if 0 <= nc < 7 and 0 <= nr < 9:
-                    if board.get(nc, nr) == ele_pid:
-                        score += 60
+                if 0 <= nc < COLS and 0 <= nr < ROWS:
+                    if board.get(nc, nr) == enemy_elephant_pid:
+                        score += rat_near_ele
 
+    # 2. Material + positional — opponent pieces
     for pid, (c, r) in opp_pieces.items():
         animal = piece_id_animal(pid)
-        score -= PIECE_VALUE[animal]
-
-        if color == Color.BLACK:
-            adv = (8 - r)
-        else:
-            adv = r
-        score -= adv * 10
+        score -= PIECE_VALUES[int(animal)]
+        score -= _advancement(opponent, r) * adv_w
 
         dist = abs(c - own_den_c) + abs(r - own_den_r)
-        if dist <= 3:
-            score -= (4 - dist) * 30
+        if dist <= den_max:
+            score -= (den_max + 1 - dist) * den_step
 
-    # 2. Trap control: opponent piece in our traps = rank 0 (big advantage)
+    # 3. Trap control: opponent piece in our traps = effectively rank 0
     our_traps = TRAPS_BLUE if color == Color.BLUE else TRAPS_BLACK
     for pid, (c, r) in opp_pieces.items():
         if (c, r) in our_traps:
-            score += 80
-
-    # 3. Mobility bonus
-    # (Skip for leaf eval to save time; only compute at depth 0)
-    # Omitting here — adds ~30% overhead; not needed for good play at depth 4+
+            score += trap_bonus
 
     return score

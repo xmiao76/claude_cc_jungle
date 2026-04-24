@@ -81,25 +81,34 @@ def test_lion_horizontal_jump():
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Tiger can jump vertically over river
+# Test 4: Tiger CANNOT jump vertically (the 3-square crossing is too long)
 # ---------------------------------------------------------------------------
 
-def test_tiger_vertical_jump():
+def test_tiger_no_vertical_jump():
     b = empty_board()
     place(b, 1, 2, Color.BLUE, Animal.TIGER)
     dests = destinations(moves_from(b, Color.BLUE, 1, 2))
-    assert (1, 6) in dests, "Tiger should be able to jump vertically over river"
+    assert (1, 6) not in dests, "Tiger should NOT make the 3-square vertical jump"
 
 
 # ---------------------------------------------------------------------------
-# Test 5: Tiger CANNOT jump horizontally
+# Test 5: Tiger CAN jump horizontally (the 2-square crossing)
 # ---------------------------------------------------------------------------
 
-def test_tiger_no_horizontal_jump():
+def test_tiger_horizontal_jump():
     b = empty_board()
     place(b, 0, 4, Color.BLUE, Animal.TIGER)
     dests = destinations(moves_from(b, Color.BLUE, 0, 4))
-    assert (3, 4) not in dests, "Tiger should NOT jump horizontally"
+    assert (3, 4) in dests, "Tiger should be able to jump horizontally over river"
+
+
+def test_tiger_jump_blocked_by_rat():
+    """Rat sitting in the 2-square horizontal river path blocks the Tiger jump."""
+    b = empty_board()
+    place(b, 0, 4, Color.BLUE, Animal.TIGER)
+    place(b, 1, 4, Color.BLACK, Animal.RAT)   # in path of (0,4) -> (3,4)
+    dests = destinations(moves_from(b, Color.BLUE, 0, 4))
+    assert (3, 4) not in dests, "Tiger jump should be blocked by rat in river"
 
 
 # ---------------------------------------------------------------------------
