@@ -8,6 +8,8 @@ import os
 import math
 import pygame
 
+from gui.fonts import safe_sysfont
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -488,7 +490,7 @@ def make_icon() -> pygame.Surface:
     s.fill((40, 100, 40))
     pygame.draw.circle(s, (220, 180, 60), (16, 16), 12)
     pygame.draw.circle(s, (40, 100, 40), (16, 16), 12, 2)
-    font = pygame.font.SysFont("segoeui", 14, bold=True)
+    font = safe_sysfont("segoeui", 14, bold=True)
     t = font.render("J", True, (0, 0, 0))
     s.blit(t, (16 - t.get_width() // 2, 16 - t.get_height() // 2))
     return s

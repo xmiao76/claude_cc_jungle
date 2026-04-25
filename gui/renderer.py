@@ -24,6 +24,7 @@ from config import (
     asset_path,
 )
 from engine.pieces import Animal, Color, piece_id_color, piece_id_animal, ANIMAL_NAMES
+from gui.fonts import safe_sysfont
 
 # Terrain background colors
 _TERRAIN_COLOR = {
@@ -69,11 +70,11 @@ class Renderer:
 
     def __init__(self, surface: pygame.Surface) -> None:
         self.surface = surface
-        self._font_piece = pygame.font.SysFont("segoeui", 16, bold=True)
-        self._font_label = pygame.font.SysFont("segoeui", 13)
-        self._font_status = pygame.font.SysFont("segoeui", 18, bold=True)
-        self._font_big = pygame.font.SysFont("segoeui", 36, bold=True)
-        self._font_small = pygame.font.SysFont("segoeui", 14)
+        self._font_piece = safe_sysfont("segoeui", 16, bold=True)
+        self._font_label = safe_sysfont("segoeui", 13)
+        self._font_status = safe_sysfont("segoeui", 18, bold=True)
+        self._font_big = safe_sysfont("segoeui", 36, bold=True)
+        self._font_small = safe_sysfont("segoeui", 14)
 
         # Sprite cache: dict of (animal, color) -> pygame.Surface | None
         self._sprites: dict[tuple[Animal, Color], pygame.Surface | None] = {}
