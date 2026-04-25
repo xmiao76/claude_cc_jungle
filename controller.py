@@ -51,6 +51,8 @@ class Controller:
         self._hover_hva = False
         self._hover_ava = False
         self._hover_diff = False
+        self._hover_first = False
+        self._hover_flip = False
 
         self._hover_replay = False
         self._hover_quit = False
@@ -60,8 +62,13 @@ class Controller:
         self._menu_hva_rect: pygame.Rect | None = None
         self._menu_ava_rect: pygame.Rect | None = None
         self._menu_diff_rect: pygame.Rect | None = None
+        self._menu_first_rect: pygame.Rect | None = None
+        self._menu_flip_rect: pygame.Rect | None = None
 
         self._human_color = Color.BLUE
+        # Settings (reset each launch)
+        self.player_first: bool = True
+        self.flipped: bool = False
         # When True, the controller will start the AI thread once the current
         # piece animation finishes. Lets the human see their move slide.
         self._pending_ai_after_anim = False
@@ -97,6 +104,8 @@ class Controller:
                     self._try_undo()
                 elif event.key == pygame.K_m:
                     self.audio.toggle_mute()
+                elif event.key == pygame.K_f:
+                    self._toggle_flip()
 
             if event.type == config.AI_MOVE_EVENT_TYPE:
                 self._on_ai_move(event.move, tick_ms)
@@ -115,6 +124,8 @@ class Controller:
             self._hover_hva = bool(self._menu_hva_rect and self._menu_hva_rect.collidepoint(mx, my))
             self._hover_ava = bool(self._menu_ava_rect and self._menu_ava_rect.collidepoint(mx, my))
             self._hover_diff = bool(self._menu_diff_rect and self._menu_diff_rect.collidepoint(mx, my))
+            self._hover_first = bool(self._menu_first_rect and self._menu_first_rect.collidepoint(mx, my))
+            self._hover_flip = bool(self._menu_flip_rect and self._menu_flip_rect.collidepoint(mx, my))
         elif self.state == AppState.GAME_OVER:
             self._hover_replay = bool(self._replay_rect and self._replay_rect.collidepoint(mx, my))
             self._hover_quit = bool(self._quit_rect and self._quit_rect.collidepoint(mx, my))
@@ -129,6 +140,10 @@ class Controller:
                 self._start_game(ava=True)
             elif self._menu_diff_rect and self._menu_diff_rect.collidepoint(mx, my):
                 self.difficulty = (self.difficulty + 1) % 3
+            elif self._menu_first_rect and self._menu_first_rect.collidepoint(mx, my):
+                self.player_first = not self.player_first
+            elif self._menu_flip_rect and self._menu_flip_rect.collidepoint(mx, my):
+                self._toggle_flip()
             return
 
         if self.state == AppState.GAME_OVER:
@@ -140,6 +155,9 @@ class Controller:
             return
 
         # In-game: side-panel buttons take priority
+        if self.renderer.flip_button_rect and self.renderer.flip_button_rect.collidepoint(mx, my):
+            self._toggle_flip()
+            return
         if self.renderer.undo_button_rect and self.renderer.undo_button_rect.collidepoint(mx, my):
             self._try_undo()
             return
@@ -148,7 +166,9 @@ class Controller:
             return
 
         if self.state == AppState.HUMAN_TURN:
-            move = self.input_handler.handle_click(mx, my, self.gs, self._human_color)
+            move = self.input_handler.handle_click(
+                mx, my, self.gs, self._human_color, self.flipped
+            )
             if move is not None:
                 self._apply_player_move(move, tick_ms)
 
@@ -169,7 +189,17 @@ class Controller:
             self.state = AppState.AI_VS_AI_THINKING
             self._start_ai_thread(Color.BLUE)
         else:
-            self.state = AppState.HUMAN_TURN
+            # Blue moves first per the rules; player_first decides who controls Blue.
+            self._human_color = Color.BLUE if self.player_first else Color.BLACK
+            if self.player_first:
+                self.state = AppState.HUMAN_TURN
+            else:
+                self.state = AppState.AI_THINKING
+                self._start_ai_thread(Color.BLUE)
+
+    def _toggle_flip(self) -> None:
+        self.flipped = not self.flipped
+        self.renderer.flipped = self.flipped
 
     # ------------------------------------------------------------------
     # AI thread
@@ -315,8 +345,13 @@ class Controller:
                 DIFFICULTY_LABELS,
                 DIFFICULTY_SUBTEXT,
                 VERSION,
+                player_first=self.player_first,
+                flipped=self.flipped,
+                hover_first=self._hover_first,
+                hover_flip=self._hover_flip,
             )
-            self._menu_hva_rect, self._menu_ava_rect, self._menu_diff_rect = rects
+            (self._menu_hva_rect, self._menu_ava_rect, self._menu_diff_rect,
+             self._menu_first_rect, self._menu_flip_rect) = rects
         else:
             ai_thinking = self.state in (AppState.AI_THINKING, AppState.AI_VS_AI_THINKING)
             self.renderer.draw(

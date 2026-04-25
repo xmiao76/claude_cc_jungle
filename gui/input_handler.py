@@ -8,11 +8,18 @@ from engine.board import Move
 from engine.pieces import Color, piece_id_color
 
 
-def pixel_to_board(px: int, py: int) -> tuple[int, int] | None:
-    """Convert pixel coordinates to (col, row). Returns None if outside board."""
+def pixel_to_board(px: int, py: int, flipped: bool = False) -> tuple[int, int] | None:
+    """Convert pixel coordinates to (col, row). Returns None if outside board.
+
+    When `flipped` is True the board is drawn rotated 180°, so the visual
+    (col, row) under the cursor maps to the opposite engine square.
+    """
     col = (px - BOARD_OFFSET_X) // _config.CELL_SIZE
     row = (py - BOARD_OFFSET_Y) // _config.CELL_SIZE
     if 0 <= col < COLS and 0 <= row < ROWS:
+        if flipped:
+            col = COLS - 1 - col
+            row = ROWS - 1 - row
         return col, row
     return None
 
@@ -40,12 +47,13 @@ class InputHandler:
         py: int,
         state,
         human_color: Color,
+        flipped: bool = False,
     ) -> Move | None:
         """Process a left-click at pixel (px, py).
 
         Returns a Move if the click completes a valid move, else None.
         """
-        sq = pixel_to_board(px, py)
+        sq = pixel_to_board(px, py, flipped)
         if sq is None:
             self.reset()
             return None

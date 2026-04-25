@@ -54,17 +54,6 @@ _ABBREV = {
 }
 
 
-def _cell_rect(col: int, row: int) -> pygame.Rect:
-    x = BOARD_OFFSET_X + col * _config.CELL_SIZE
-    y = BOARD_OFFSET_Y + row * _config.CELL_SIZE
-    return pygame.Rect(x, y, _config.CELL_SIZE, _config.CELL_SIZE)
-
-
-def _pixel_center(col: int, row: int) -> tuple[int, int]:
-    r = _cell_rect(col, row)
-    return r.centerx, r.centery
-
-
 class Renderer:
     """Draws all game visuals onto a pygame Surface."""
 
@@ -97,6 +86,29 @@ class Renderer:
         # Last computed UI rects (for hit-testing in controller)
         self.undo_button_rect: pygame.Rect | None = None
         self.mute_button_rect: pygame.Rect | None = None
+        self.flip_button_rect: pygame.Rect | None = None
+
+        # Display orientation (toggled by controller)
+        self.flipped: bool = False
+
+    # ------------------------------------------------------------------
+    # Coordinate helpers (apply board flip)
+    # ------------------------------------------------------------------
+
+    def _vcol(self, c: int) -> int:
+        return COLS - 1 - c if self.flipped else c
+
+    def _vrow(self, r: int) -> int:
+        return ROWS - 1 - r if self.flipped else r
+
+    def _cell_rect(self, col: int, row: int) -> pygame.Rect:
+        x = BOARD_OFFSET_X + self._vcol(col) * _config.CELL_SIZE
+        y = BOARD_OFFSET_Y + self._vrow(row) * _config.CELL_SIZE
+        return pygame.Rect(x, y, _config.CELL_SIZE, _config.CELL_SIZE)
+
+    def _pixel_center(self, col: int, row: int) -> tuple[int, int]:
+        r = self._cell_rect(col, row)
+        return r.centerx, r.centery
 
     # ------------------------------------------------------------------
     # Asset loading (called once after pygame.display is set)
@@ -169,7 +181,7 @@ class Renderer:
         self._draw_animations(tick_ms)
         self._draw_grid()
         self._draw_board_labels()
-        self._draw_panel(state, ai_thinking, tick_ms, undo_enabled, muted)
+        self._draw_panel(state, ai_thinking, tick_ms, undo_enabled, muted, self.flipped)
 
     # ------------------------------------------------------------------
     # Board terrain
@@ -179,7 +191,7 @@ class Renderer:
         for c in range(COLS):
             for r in range(ROWS):
                 terrain = TERRAIN[c][r]
-                rect = _cell_rect(c, r)
+                rect = self._cell_rect(c, r)
                 tile = self._tile_cache.get(terrain)
                 if tile:
                     self.surface.blit(tile, rect)
@@ -215,11 +227,12 @@ class Renderer:
                              (BOARD_OFFSET_X + COLS * _config.CELL_SIZE, y), 1)
 
     def _draw_board_labels(self) -> None:
-        # Column labels A-G
+        # Column labels A-G follow the visual column so the on-screen label
+        # matches what the move history says (e.g. D9 is always Blue's den).
         for c in range(COLS):
             label = chr(ord('A') + c)
             surf = self._font_label.render(label, True, (180, 180, 180))
-            x = BOARD_OFFSET_X + c * _config.CELL_SIZE + _config.CELL_SIZE // 2 - surf.get_width() // 2
+            x = BOARD_OFFSET_X + self._vcol(c) * _config.CELL_SIZE + _config.CELL_SIZE // 2 - surf.get_width() // 2
             y = BOARD_OFFSET_Y + ROWS * _config.CELL_SIZE + 4
             self.surface.blit(surf, (x, y))
         # Row labels 1-9
@@ -227,7 +240,7 @@ class Renderer:
             label = str(r + 1)
             surf = self._font_label.render(label, True, (180, 180, 180))
             x = BOARD_OFFSET_X - surf.get_width() - 4
-            y = BOARD_OFFSET_Y + r * _config.CELL_SIZE + _config.CELL_SIZE // 2 - surf.get_height() // 2
+            y = BOARD_OFFSET_Y + self._vrow(r) * _config.CELL_SIZE + _config.CELL_SIZE // 2 - surf.get_height() // 2
             self.surface.blit(surf, (x, y))
 
     # ------------------------------------------------------------------
@@ -241,16 +254,16 @@ class Renderer:
     ) -> None:
         # Selected piece: gold border
         if selected:
-            rect = _cell_rect(*selected)
+            rect = self._cell_rect(*selected)
             pygame.draw.rect(self.surface, COLOR_HIGHLIGHT_SELECT, rect, 4)
 
         # Legal move targets: semi-transparent green circle
         for (c, r) in legal_targets:
-            center = _pixel_center(c, r)
+            center = self._pixel_center(c, r)
             dot_surf = pygame.Surface((_config.CELL_SIZE, _config.CELL_SIZE), pygame.SRCALPHA)
             pygame.draw.circle(dot_surf, (100, 230, 100, 120), (_config.CELL_SIZE // 2, _config.CELL_SIZE // 2),
                                _config.CELL_SIZE // 4)
-            self.surface.blit(dot_surf, _cell_rect(c, r))
+            self.surface.blit(dot_surf, self._cell_rect(c, r))
 
     # ------------------------------------------------------------------
     # Capture flash
@@ -263,7 +276,7 @@ class Renderer:
         expired = []
         for (c, r), end_ms in self._flashes.items():
             if tick_ms < end_ms:
-                rect = _cell_rect(c, r)
+                rect = self._cell_rect(c, r)
                 flash_surf = pygame.Surface((_config.CELL_SIZE, _config.CELL_SIZE), pygame.SRCALPHA)
                 alpha = int(180 * (end_ms - tick_ms) / CAPTURE_FLASH_MS)
                 flash_surf.fill((220, 50, 50, alpha))
@@ -322,7 +335,7 @@ class Renderer:
         color: Color, animal: Animal,
         is_selected: bool,
     ) -> None:
-        rect = _cell_rect(col, row)
+        rect = self._cell_rect(col, row)
         cx, cy = rect.centerx, rect.centery
         sprite = self._sprites.get((animal, color))
 
@@ -394,8 +407,8 @@ class Renderer:
                 continue
             t = elapsed / a["duration_ms"]
             t = 1 - (1 - t) * (1 - t)   # easeOutQuad
-            fx, fy = _pixel_center(a["fc"], a["fr"])
-            tx, ty = _pixel_center(a["tc"], a["tr"])
+            fx, fy = self._pixel_center(a["fc"], a["fr"])
+            tx, ty = self._pixel_center(a["tc"], a["tr"])
             cx = int(fx + (tx - fx) * t)
             cy = int(fy + (ty - fy) * t)
             self._draw_floating_piece(cx, cy, a["color"], a["animal"])
@@ -427,6 +440,7 @@ class Renderer:
         tick_ms: int,
         undo_enabled: bool = False,
         muted: bool = False,
+        flipped: bool = False,
     ) -> None:
         panel_x = BOARD_OFFSET_X + COLS * _config.CELL_SIZE + 20
         panel_rect = pygame.Rect(panel_x, 0, PANEL_WIDTH, _config.WINDOW_HEIGHT)
@@ -488,8 +502,20 @@ class Renderer:
             y += 17
 
         # --- Buttons at bottom of panel ---
-        btn_y = _config.WINDOW_HEIGHT - 90
-        undo_rect = pygame.Rect(panel_x + 10, btn_y, PANEL_WIDTH - 30, 32)
+        btn_y = _config.WINDOW_HEIGHT - 130
+
+        flip_rect = pygame.Rect(panel_x + 10, btn_y, PANEL_WIDTH - 30, 32)
+        pygame.draw.rect(self.surface, (60, 80, 100), flip_rect, border_radius=6)
+        pygame.draw.rect(self.surface, (140, 140, 180), flip_rect, 1, border_radius=6)
+        flabel = self._font_small.render(
+            "Flip: Flipped (F)" if flipped else "Flip: Normal (F)",
+            True, (220, 220, 220),
+        )
+        self.surface.blit(flabel, (flip_rect.centerx - flabel.get_width() // 2,
+                                   flip_rect.centery - flabel.get_height() // 2))
+        self.flip_button_rect = flip_rect
+
+        undo_rect = pygame.Rect(panel_x + 10, btn_y + 40, PANEL_WIDTH - 30, 32)
         undo_color = (70, 90, 120) if undo_enabled else (50, 50, 60)
         pygame.draw.rect(self.surface, undo_color, undo_rect, border_radius=6)
         pygame.draw.rect(self.surface, (140, 140, 180), undo_rect, 1, border_radius=6)
@@ -501,7 +527,7 @@ class Renderer:
                                    undo_rect.centery - ulabel.get_height() // 2))
         self.undo_button_rect = undo_rect
 
-        mute_rect = pygame.Rect(panel_x + 10, btn_y + 40, PANEL_WIDTH - 30, 32)
+        mute_rect = pygame.Rect(panel_x + 10, btn_y + 80, PANEL_WIDTH - 30, 32)
         pygame.draw.rect(self.surface, (60, 60, 80), mute_rect, border_radius=6)
         pygame.draw.rect(self.surface, (140, 140, 180), mute_rect, 1, border_radius=6)
         mlabel = self._font_small.render(
@@ -588,8 +614,12 @@ class Renderer:
         difficulty_labels: list[str],
         difficulty_subtext: list[str] | None = None,
         version: str = "",
-    ) -> tuple[pygame.Rect, pygame.Rect, pygame.Rect]:
-        """Draw main menu. Returns (hva_rect, ava_rect, diff_rect)."""
+        player_first: bool = True,
+        flipped: bool = False,
+        hover_first: bool = False,
+        hover_flip: bool = False,
+    ) -> tuple[pygame.Rect, pygame.Rect, pygame.Rect, pygame.Rect, pygame.Rect]:
+        """Draw main menu. Returns (hva_rect, ava_rect, diff_rect, first_rect, flip_rect)."""
         surface.fill((20, 30, 20))
 
         cx = _config.WINDOW_WIDTH // 2
@@ -597,19 +627,25 @@ class Renderer:
 
         # Title
         title = self._font_big.render("JUNGLE", True, (220, 180, 60))
-        surface.blit(title, (cx - title.get_width() // 2, cy - 200))
+        surface.blit(title, (cx - title.get_width() // 2, cy - 230))
         sub = self._font_small.render("Dou Shou Qi  •  斗兽棋", True, (140, 140, 140))
-        surface.blit(sub, (cx - sub.get_width() // 2, cy - 155))
+        surface.blit(sub, (cx - sub.get_width() // 2, cy - 185))
 
-        btn_w, btn_h = 220, 50
-        hva_rect = pygame.Rect(cx - btn_w // 2, cy - 80, btn_w, btn_h)
-        ava_rect = pygame.Rect(cx - btn_w // 2, cy - 10, btn_w, btn_h)
-        diff_rect = pygame.Rect(cx - btn_w // 2, cy + 70, btn_w, btn_h)
+        btn_w, btn_h = 240, 44
+        spacing = 56
+        first_y = cy - 140
+        hva_rect   = pygame.Rect(cx - btn_w // 2, first_y + spacing * 0, btn_w, btn_h)
+        ava_rect   = pygame.Rect(cx - btn_w // 2, first_y + spacing * 1, btn_w, btn_h)
+        diff_rect  = pygame.Rect(cx - btn_w // 2, first_y + spacing * 2, btn_w, btn_h)
+        first_rect = pygame.Rect(cx - btn_w // 2, first_y + spacing * 3, btn_w, btn_h)
+        flip_rect  = pygame.Rect(cx - btn_w // 2, first_y + spacing * 4, btn_w, btn_h)
 
         for rect, label, hover in [
             (hva_rect, "Human vs AI", hover_hva),
             (ava_rect, "Watch AI vs AI", hover_ava),
             (diff_rect, f"Difficulty: {difficulty_labels[difficulty]}", hover_diff),
+            (first_rect, f"First move: {'Player' if player_first else 'AI'}", hover_first),
+            (flip_rect, f"Board: {'Flipped' if flipped else 'Normal'}", hover_flip),
         ]:
             btn_color = (80, 110, 80) if hover else (40, 70, 40)
             pygame.draw.rect(surface, btn_color, rect, border_radius=10)
@@ -621,14 +657,16 @@ class Renderer:
         if difficulty_subtext:
             sub_text = difficulty_subtext[difficulty]
             sub_surf = self._font_small.render(sub_text, True, (170, 200, 170))
-            surface.blit(sub_surf, (cx - sub_surf.get_width() // 2, cy + 125))
+            surface.blit(sub_surf, (cx - sub_surf.get_width() // 2, flip_rect.bottom + 12))
 
-        hint = self._font_small.render("ESC: menu  |  U: undo  |  M: mute", True, (80, 80, 80))
-        surface.blit(hint, (cx - hint.get_width() // 2, cy + 155))
+        hint = self._font_small.render(
+            "ESC: menu  |  U: undo  |  M: mute  |  F: flip", True, (80, 80, 80)
+        )
+        surface.blit(hint, (cx - hint.get_width() // 2, flip_rect.bottom + 36))
 
         if version:
             v_surf = self._font_small.render(f"v{version}", True, (60, 60, 60))
             surface.blit(v_surf, (_config.WINDOW_WIDTH - v_surf.get_width() - 10,
                                    _config.WINDOW_HEIGHT - v_surf.get_height() - 8))
 
-        return hva_rect, ava_rect, diff_rect
+        return hva_rect, ava_rect, diff_rect, first_rect, flip_rect
