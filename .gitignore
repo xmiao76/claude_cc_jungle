@@ -10,3 +10,4 @@ dist/
 .pytest_cache/
 *.egg-info/
 *.exe
+/.claude

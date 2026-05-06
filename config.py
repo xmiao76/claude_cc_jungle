@@ -94,16 +94,18 @@ CAPTURE_FLASH_MS = 300  # duration of capture animation
 # AI
 # ---------------------------------------------------------------------------
 
-AI_DEPTH_EASY = 2
-AI_DEPTH_MEDIUM = 4
+AI_DEPTH_EASY = 3
+AI_DEPTH_MEDIUM = 5
 AI_TIME_HARD_MS = 2000   # iterative deepening time budget for Hard
 
 DIFFICULTY_LABELS = ["Easy", "Medium", "Hard"]
 DIFFICULTY_SUBTEXT = [
-    "2-ply search · instant",
-    "4-ply search · instant",
+    "3-ply search · instant",
+    "5-ply search · ~0.5s",
     "iterative · ~2s",
 ]
+
+USE_OPENING_BOOK = True
 
 # Material values per Animal rank (1=Rat .. 8=Elephant)
 PIECE_VALUES: dict[int, int] = {
@@ -125,15 +127,33 @@ EVAL_WEIGHTS = {
     "rat_in_water": 40,
     "rat_adjacent_to_enemy_elephant": 60,
     "trap_control": 80,
+    # Added in stronger-engine refactor
+    "mobility": 2,                 # per-extra-pseudo-move
+    "threat": 8,                   # per-attacker × victim_value/100
+    "den_defender": 25,            # per friendly piece within 2 of own den
+    "jump_ready": 20,              # Lion/Tiger has at least one jump available
+    "rat_blocks_river": 35,        # our rat sits on river square
+    "tempo": 10,                   # side-to-move bonus
+    "advancement_acceleration": 6, # extra per row past midline (row 4)
+    "delta_margin": 200,           # quiescence delta-pruning margin
 }
 
 QUIESCENCE_MAX_PLY = 4    # cap on quiescence search depth
+
+# Search tuning (added by stronger-engine plan)
+NMP_REDUCTION = 2          # depth reduction R for null-move pruning
+NMP_MIN_DEPTH = 3
+NMP_MIN_PIECES = 3         # disable NMP if side-to-move has fewer pieces
+LMR_MIN_DEPTH = 3
+LMR_MOVES_BEFORE = 4       # number of full-depth moves before reductions kick in
+ASPIRATION_DELTA = 50
+ASPIRATION_MIN_DEPTH = 4
 
 # ---------------------------------------------------------------------------
 # Versioning
 # ---------------------------------------------------------------------------
 
-VERSION = "1.1"
+VERSION = "1.2"
 
 # ---------------------------------------------------------------------------
 # Custom pygame event IDs (registered at runtime)

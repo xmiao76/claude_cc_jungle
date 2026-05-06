@@ -1,6 +1,6 @@
 JUNGLE - THE BOARD GAME
 =======================
-Version 1.1 | Windows Desktop
+Version 1.2 | Windows Desktop
 
 
 AUTHORSHIP
@@ -9,6 +9,18 @@ Designed and implemented by an AI coding agent (Anthropic's Claude Opus 4.7
 via Claude Code). The architecture, gameplay logic, AI engine, GUI, automated
 tests, and packaging were all generated programmatically; no third-party code
 was incorporated. Initial generation: 2026-04-23.
+
+WHAT'S NEW IN 1.2
+-----------------
+  - Stronger AI engine: principal-variation search with null-move pruning and
+    late-move reductions; iterative deepening reaches deeper inside the same
+    time budget.
+  - Mate-distance scoring: the AI now prefers faster wins and longer losses.
+  - Static Exchange Evaluation: avoids losing trades the old AI fell for.
+  - Repetition and 50-move draw recognition: no more endless shuffling.
+  - Richer position evaluation: mobility, defenders, jump-readiness, river
+    blockades, and tempo all factor in.
+  - Tiny opening book on Hard difficulty for sharper early play.
 
 WHAT'S NEW IN 1.1
 -----------------

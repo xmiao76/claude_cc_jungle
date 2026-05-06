@@ -73,6 +73,20 @@ def test_evaluate_rat_in_water_bonus():
         >= EVAL_WEIGHTS["rat_in_water"] - 50
 
 
+def test_evaluate_symmetry_random_midgame():
+    """For any non-terminal position, eval(BLUE) must equal -eval(BLACK)."""
+    gs = make_gs(
+        (3, 4, Color.BLUE, Animal.TIGER),
+        (3, 5, Color.BLACK, Animal.WOLF),
+        (3, 6, Color.BLACK, Animal.LION),
+        (0, 8, Color.BLUE, Animal.RAT),
+        (6, 0, Color.BLACK, Animal.CAT),
+        (1, 3, Color.BLUE, Animal.RAT),
+    )
+    gs.turn = Color.BLUE
+    assert evaluate(gs, Color.BLUE) == -evaluate(gs, Color.BLACK)
+
+
 def test_evaluate_terminal_returns_inf():
     """When the game is decided, eval returns +/- _INF."""
     gs = make_gs((3, 0, Color.BLUE, Animal.WOLF))   # Wolf already in black den

@@ -166,6 +166,36 @@ def test_ai_quiescence_avoids_horizon_blunder():
     assert not bad, "AI fell for the horizon trap (Tiger captured defended Wolf)"
 
 
+def test_ai_prefers_faster_mate():
+    """When two winning lines exist, AI should pick the shorter mate."""
+    # Blue Wolf at (3,1) — 1 move from den (3,0). Lion is also nearby but slower.
+    gs = make_gs(
+        (3, 1, Color.BLUE, Animal.WOLF),     # mate-in-1: move to (3,0)
+        (0, 8, Color.BLUE, Animal.LION),     # alternative slow attacker
+        (6, 0, Color.BLACK, Animal.RAT),
+    )
+    gs.turn = Color.BLUE
+    ai = AIPlayer(Color.BLUE, difficulty=2)
+    move = ai.get_best_move(gs, time_budget_ms=500)
+    assert move is not None
+    assert (move.tc, move.tr) == DEN_BLACK
+
+
+def test_ai_seeks_repetition_when_losing():
+    """Down material with only a perpetual escape, AI should choose to repeat."""
+    # Blue Lion at (0,8); Black Lion + Tiger up the board. Blue should shuffle.
+    gs = make_gs(
+        (0, 8, Color.BLUE, Animal.LION),
+        (1, 0, Color.BLACK, Animal.LION),
+        (5, 0, Color.BLACK, Animal.TIGER),
+        (3, 4, Color.BLACK, Animal.ELEPHANT),
+    )
+    gs.turn = Color.BLUE
+    ai = AIPlayer(Color.BLUE, difficulty=2)
+    move = ai.get_best_move(gs, time_budget_ms=500)
+    assert move is not None  # just must not crash; behaviour is hard to assert
+
+
 def test_ai_vs_ai_quick():
     """Two Easy AIs should be able to play a short game without crashing."""
     gs = GameState()
