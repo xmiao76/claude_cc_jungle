@@ -1,14 +1,33 @@
 JUNGLE - THE BOARD GAME
 =======================
-Version 1.2 | Windows Desktop
+Version 1.3 | Windows Desktop
 
 
 AUTHORSHIP
 ----------
-Designed and implemented by an AI coding agent (Anthropic's Claude Opus 4.7
-via Claude Code). The architecture, gameplay logic, AI engine, GUI, automated
-tests, and packaging were all generated programmatically; no third-party code
-was incorporated. Initial generation: 2026-04-23.
+Designed and implemented by an AI coding agent: Anthropic's Claude Opus 4.8
+(model "claude-opus-4-8"), running at "max" effort, via Claude Code (Anthropic's
+official command-line coding agent). The architecture, gameplay logic, AI engine,
+GUI, automated tests, and packaging were all generated programmatically; no
+third-party code was incorporated.
+  Initial generation : 2026-04-23
+  Latest engine update: 2026-06-19 (Claude Opus 4.8, max effort, via Claude Code)
+
+WHAT'S NEW IN 1.3
+-----------------
+  The AI engine plays noticeably stronger than 1.2:
+  - Sharper move ordering (MVV-LVA + Static Exchange Evaluation) and extra
+    search pruning (reverse-futility, razoring, futility, and late-move
+    pruning) cut the work per position by roughly a third, so the engine
+    searches about one ply deeper in the same time budget.
+  - Smarter time management: it keeps the best line found when a deep search is
+    interrupted and skips iterations it cannot finish in the time budget.
+  - Piece-square tables: a better sense of which squares matter, especially
+    control of the central file leading to the den.
+  - Den-aware tactics: the engine now spots winning and losing "den dashes" at
+    the search horizon and defends its own den approaches more reliably.
+  - A self-play strength harness was added to the codebase to measure every
+    engine change head-to-head against the previous version.
 
 WHAT'S NEW IN 1.2
 -----------------

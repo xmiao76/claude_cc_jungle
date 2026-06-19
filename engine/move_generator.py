@@ -77,6 +77,18 @@ def generate_capture_moves(board: Board, color: Color) -> list[Move]:
     return [m for m in generate_legal_moves(board, color) if m.captured != 0]
 
 
+def generate_noisy_moves(board: Board, color: Color) -> list[Move]:
+    """Captures plus den-entry (immediately winning) moves.
+
+    Used by quiescence so a winning den dash sitting just past the horizon is
+    not missed. A den-entry move is always a non-capture (the enemy den is
+    empty), so it would otherwise be invisible to a capture-only quiescence.
+    """
+    opp_den = DEN_BLACK if color == Color.BLUE else DEN_BLUE
+    return [m for m in generate_legal_moves(board, color)
+            if m.captured != 0 or (m.tc, m.tr) == opp_den]
+
+
 def generate_legal_moves(board: Board, color: Color) -> list[Move]:
     """Generate all legal moves for *color* on *board*."""
     moves: list[Move] = []
