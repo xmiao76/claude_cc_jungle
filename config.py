@@ -136,9 +136,39 @@ EVAL_WEIGHTS = {
     "tempo": 10,                   # side-to-move bonus
     "advancement_acceleration": 6, # extra per row past midline (row 4)
     "delta_margin": 200,           # quiescence delta-pruning margin
+    # Added by the stronger-engine plan (Tasks 5-6)
+    "pst": 1,                      # piece-square table multiplier
+    "den_threat": 45,              # per enemy piece that can reach an undefended
+                                   # square next to our den (and the mirror)
 }
 
 QUIESCENCE_MAX_PLY = 4    # cap on quiescence search depth
+
+
+# ---------------------------------------------------------------------------
+# Piece-square table (positional shaping)
+# ---------------------------------------------------------------------------
+# Indexed [advancement][col], where advancement is measured from the piece's own
+# back rank (0) toward the enemy den (ROWS-1). Applied per-piece using the
+# piece's OWN-color advancement (added for own pieces, subtracted for opponent
+# pieces) so the evaluation stays antisymmetric: eval(BLUE) == -eval(BLACK).
+# The table is column-symmetric (value at col c == col COLS-1-c) so there is no
+# left/right bias and the symmetric starting position evaluates to exactly 0.
+# It peaks on the central file — the direct approach to the den — and rewards
+# central advancement into the enemy half. Magnitudes are small vs PIECE_VALUES.
+def _build_pst() -> list[list[int]]:
+    col_weight = [0, 5, 9, 12, 9, 5, 0]   # symmetric; peak on the central den file
+    table = [[0] * COLS for _ in range(ROWS)]
+    for adv in range(ROWS):
+        for c in range(COLS):
+            v = col_weight[c]
+            if adv > ROWS // 2:           # enemy half: central advance is best
+                v += (adv - ROWS // 2) * (col_weight[c] // 6)
+            table[adv][c] = v
+    return table
+
+
+PST_TABLE = _build_pst()
 
 # Search tuning (added by stronger-engine plan)
 NMP_REDUCTION = 2          # depth reduction R for null-move pruning
@@ -153,7 +183,7 @@ ASPIRATION_MIN_DEPTH = 4
 # Versioning
 # ---------------------------------------------------------------------------
 
-VERSION = "1.2"
+VERSION = "1.3"
 
 # ---------------------------------------------------------------------------
 # Custom pygame event IDs (registered at runtime)

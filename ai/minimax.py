@@ -17,12 +17,13 @@ import time
 
 from engine.board import Move
 from engine.game_state import GameState
-from engine.move_generator import generate_capture_moves
+from engine.move_generator import generate_capture_moves, generate_noisy_moves
 from engine.pieces import Color
 from ai.evaluator import evaluate, _INF
 from ai.transposition import TranspositionTable, TT_EXACT, TT_LOWER, TT_UPPER
 from ai.see import see_capture
 from ai import opening_book
+from ai.search_config import SearchConfig, strong_config
 from config import (
     AI_DEPTH_EASY, AI_DEPTH_MEDIUM, AI_TIME_HARD_MS,
     QUIESCENCE_MAX_PLY, EVAL_WEIGHTS,
@@ -30,11 +31,18 @@ from config import (
     LMR_MIN_DEPTH, LMR_MOVES_BEFORE,
     ASPIRATION_DELTA, ASPIRATION_MIN_DEPTH,
     USE_OPENING_BOOK,
+    DEN_BLACK, DEN_BLUE,
 )
 
 _MATE = _INF - 1000
 _MAX_PLY = 64
 _MATE_BOUND = _MATE - _MAX_PLY  # any |score| >= bound is treated as mate-distance
+
+# Smart time management: don't *start* a new iteration if the previous one took
+# long enough that the next is predicted to overrun the budget. A started
+# iteration still runs to the hard limit and its partial result is kept, so this
+# only skips starts that would barely progress. The hard limit bounds wall-clock.
+_NEXT_ITER_FACTOR = 1.5
 
 
 def _mate_in(ply: int) -> int:
@@ -66,11 +74,16 @@ def _tt_score_from_probe(score: int, ply: int) -> int:
 class AIPlayer:
     """AI player using negamax PVS with iterative deepening."""
 
-    def __init__(self, color: Color, difficulty: int = 1) -> None:
+    def __init__(self, color: Color, difficulty: int = 1,
+                 cfg: SearchConfig | None = None) -> None:
         self.color = color
         self.difficulty = difficulty
+        self.cfg = cfg or strong_config()
         self._tt = TranspositionTable()
         self._nodes = 0
+        self._last_depth = 0          # last fully-completed search depth (for bench)
+        self._seldepth = 0            # max ply reached including quiescence
+        self._completed_root_moves = 0  # root moves finished in the current iteration
         self._start_time = 0.0
         self._time_limit = 0.0
         self._stopped = False
@@ -100,6 +113,8 @@ class AIPlayer:
                 return book_move
 
         self._nodes = 0
+        self._last_depth = 0
+        self._seldepth = 0
         self._stopped = False
         self._start_time = time.perf_counter()
         self._reset_search_heuristics()
@@ -120,16 +135,31 @@ class AIPlayer:
     def _search_fixed_depth(self, state: GameState, depth: int) -> Move | None:
         self._best_move_root = None
         self._negamax_root(state, depth, -_INF, _INF)
+        self._last_depth = depth
         return self._best_move_root
 
     def _search_iterative_deepening(self, state: GameState) -> Move | None:
         best_move = state.legal_moves()[0]
         self._best_move_root = best_move
         prev_score: int | None = None
+        last_iter_dur = 0.0
         for depth in range(1, 32):
-            if self._time_expired():
+            # ---- Smart time: decide whether to START this iteration ----
+            elapsed = time.perf_counter() - self._start_time
+            if self.cfg.use_smart_time:
+                # Always complete depth 1; otherwise skip an iteration predicted
+                # to overrun the budget (its partial result wouldn't beat the
+                # full result we already have).
+                if (depth > 1 and last_iter_dur > 0.0
+                        and elapsed + last_iter_dur * _NEXT_ITER_FACTOR
+                        > self._time_limit):
+                    break
+            elif self._time_expired():
                 break
+
+            iter_start = time.perf_counter()
             self._stopped = False
+            self._completed_root_moves = 0
 
             # Aspiration windows after a few completed iterations.
             if prev_score is not None and depth >= ASPIRATION_MIN_DEPTH:
@@ -153,6 +183,14 @@ class AIPlayer:
             if not self._stopped and self._best_move_root is not None:
                 best_move = self._best_move_root
                 prev_score = score
+                self._last_depth = depth
+            elif (self.cfg.use_partial_iteration
+                    and self._completed_root_moves >= 1
+                    and self._best_move_root is not None):
+                # Interrupted iteration: keep the deeper best move found so far.
+                # (It is at worst the previous PV move searched one ply deeper.)
+                best_move = self._best_move_root
+            last_iter_dur = time.perf_counter() - iter_start
             # Age history between iterations.
             self._age_history()
             if self._time_expired():
@@ -182,7 +220,7 @@ class AIPlayer:
     # ------------------------------------------------------------------
 
     def _order_moves(self, moves: list[Move], tt_best: Move | None,
-                     ply: int, prev_move: Move | None) -> list[Move]:
+                     ply: int, prev_move: Move | None, board) -> list[Move]:
         if not moves:
             return moves
         killers = self._killers[ply] if 0 <= ply < _MAX_PLY else (None, None)
@@ -190,12 +228,25 @@ class AIPlayer:
         if prev_move is not None:
             counter = self._counter.get((prev_move.fc, prev_move.fr, prev_move.tc, prev_move.tr))
 
+        use_mvv_lva = self.cfg.use_mvv_lva_fix
+        use_see = self.cfg.use_see_ordering
+
         def key(m: Move) -> int:
             if tt_best is not None and m == tt_best:
                 return -1_000_000
             if m.captured:
-                # MVV-LVA: more valuable victim first, less valuable attacker first.
-                return -100_000 - abs(m.captured) * 10 + abs(m.captured) - 0
+                if not use_mvv_lva:
+                    # Original (victim-only) ordering — preserved for baseline A/B.
+                    return -100_000 - abs(m.captured) * 10 + abs(m.captured) - 0
+                victim = abs(m.captured)
+                attacker = abs(board.get(m.fc, m.fr))
+                if use_see:
+                    see_val = see_capture(board, m)
+                    if see_val < 0:
+                        # Losing capture: search it after quiet moves.
+                        return 10_000 - see_val
+                # MVV-LVA: most valuable victim first, least valuable attacker first.
+                return -100_000 - victim * 16 + attacker
             if m == killers[0]:
                 return -50_000
             if m == killers[1]:
@@ -213,6 +264,7 @@ class AIPlayer:
     def _negamax_root(self, state: GameState, depth: int, alpha: int, beta: int) -> int:
         original_alpha = alpha
         best_score = -_INF - 1
+        self._completed_root_moves = 0
 
         moves = state.legal_moves()
         if not moves:
@@ -220,7 +272,7 @@ class AIPlayer:
 
         tt_entry = self._tt.get(state.board.turn_hash(state.turn))
         tt_best = tt_entry.best_move if tt_entry else None
-        moves = self._order_moves(moves, tt_best, ply=0, prev_move=None)
+        moves = self._order_moves(moves, tt_best, ply=0, prev_move=None, board=state.board)
         best_move = moves[0]
 
         for idx, move in enumerate(moves):
@@ -240,9 +292,16 @@ class AIPlayer:
             state.undo_move()
             if self._stopped:
                 break
+            self._completed_root_moves += 1
             if score > best_score:
                 best_score = score
                 best_move = move
+                # Commit improvements immediately so an interrupted deeper
+                # iteration can still return its best move so far. The
+                # original_alpha guard avoids committing fail-low artifacts from
+                # a narrow aspiration window.
+                if score > original_alpha:
+                    self._best_move_root = best_move
             if score > alpha:
                 alpha = score
             if alpha >= beta:
@@ -262,6 +321,8 @@ class AIPlayer:
     def _negamax(self, state: GameState, depth: int, alpha: int, beta: int,
                  ply: int, prev_move: Move | None, allow_null: bool) -> int:
         self._nodes += 1
+        if ply > self._seldepth:
+            self._seldepth = ply
         if self._nodes & 2047 == 0 and self._time_expired():
             self._stopped = True
             return 0
@@ -308,10 +369,32 @@ class AIPlayer:
         if not moves:
             return _mated_in(ply)
 
+        # Static eval, computed once for the shallow-depth pruning heuristics.
+        # Only meaningful at non-PV nodes outside a mate window.
+        static_eval: int | None = None
+        not_mate_window = abs(beta) < _MATE_BOUND and abs(alpha) < _MATE_BOUND
+        if not is_pv and not_mate_window:
+            static_eval = evaluate(state, state.turn, self.cfg)
+
+            # ---- Reverse futility pruning (a.k.a. static null move) ----
+            if (self.cfg.use_rfp and depth <= self.cfg.rfp_max_depth
+                    and static_eval - self.cfg.rfp_margin * depth >= beta):
+                return static_eval
+
+            # ---- Razoring: far below alpha at shallow depth → verify with qsearch ----
+            if (self.cfg.use_razoring and depth <= self.cfg.razor_max_depth
+                    and static_eval + self.cfg.razor_margin < alpha):
+                q = self._quiesce(state, alpha, beta, qply=0, ply=ply)
+                if self._stopped:
+                    return 0
+                if q < alpha:
+                    return q
+
         # ---- Null move pruning ----
         if (allow_null and not is_pv and depth >= NMP_MIN_DEPTH
                 and state.board.alive_count(state.turn) >= NMP_MIN_PIECES):
-            static_eval = evaluate(state, state.turn)
+            if static_eval is None:
+                static_eval = evaluate(state, state.turn, self.cfg)
             if static_eval >= beta:
                 state.apply_null()
                 null_score = -self._negamax(state, depth - 1 - NMP_REDUCTION,
@@ -326,13 +409,31 @@ class AIPlayer:
                         null_score = beta
                     return null_score
 
-        moves = self._order_moves(moves, tt_best, ply, prev_move)
+        moves = self._order_moves(moves, tt_best, ply, prev_move, board=state.board)
+
+        # Opponent den square: a quiet move that enters it is a *winning* move and
+        # must never be futility/late-move pruned.
+        opp_den = DEN_BLACK if state.turn == Color.BLUE else DEN_BLUE
 
         best_score = -_INF
         best_move: Move | None = None
         original_alpha = alpha
 
         for idx, move in enumerate(moves):
+            is_quiet = not move.captured and (move.tc, move.tr) != opp_den
+
+            # ---- Forward pruning of late / hopeless quiet moves (non-PV only) ----
+            if is_quiet and best_move is not None and not is_pv and not_mate_window:
+                # Late move pruning (move-count based).
+                if (self.cfg.use_lmp
+                        and idx >= self.cfg.lmp_base + depth * depth):
+                    continue
+                # Futility pruning near the frontier.
+                if (self.cfg.use_futility and static_eval is not None
+                        and depth <= self.cfg.futility_max_depth
+                        and static_eval + self.cfg.futility_margin <= alpha):
+                    continue
+
             state.apply_move(move)
 
             # ---- Late Move Reductions ----
@@ -428,7 +529,7 @@ class AIPlayer:
             if tt_entry.flag == TT_UPPER and tt_score <= alpha:
                 return tt_score
 
-        stand_pat = evaluate(state, state.turn)
+        stand_pat = evaluate(state, state.turn, self.cfg)
         if qply >= QUIESCENCE_MAX_PLY:
             return stand_pat
         if stand_pat >= beta:
@@ -437,16 +538,29 @@ class AIPlayer:
             alpha = stand_pat
 
         delta_margin = EVAL_WEIGHTS["delta_margin"]
-        captures = generate_capture_moves(state.board, state.turn)
-        # MVV ordering then SEE filter
-        captures.sort(key=lambda m: -abs(m.captured))
+        board = state.board
+        opp_den = DEN_BLACK if state.turn == Color.BLUE else DEN_BLUE
+        if self.cfg.use_noisy_den_quiescence:
+            moves = generate_noisy_moves(board, state.turn)
+        else:
+            moves = generate_capture_moves(board, state.turn)
+        # MVV-LVA ordering (least-valuable attacker breaks victim ties), then SEE
+        # filter. Den-entry moves (winning) sort first.
+        if self.cfg.use_mvv_lva_fix:
+            moves.sort(key=lambda m: (-1_000_000 if (m.tc, m.tr) == opp_den
+                                      else -abs(m.captured) * 16 + abs(board.get(m.fc, m.fr))))
+        else:
+            moves.sort(key=lambda m: -abs(m.captured))
 
-        for move in captures:
+        for move in moves:
+            # Entering the enemy den wins immediately — the fastest mate from here.
+            if (move.tc, move.tr) == opp_den:
+                return _mate_in(ply + qply)
             # Delta pruning: even capturing this victim won't reach alpha.
             if stand_pat + abs(move.captured) + delta_margin < alpha:
                 continue
             # SEE prune: skip clearly losing captures.
-            if see_capture(state.board, move) < 0:
+            if see_capture(board, move) < 0:
                 continue
 
             state.apply_move(move)

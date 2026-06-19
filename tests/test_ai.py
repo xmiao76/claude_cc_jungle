@@ -150,19 +150,27 @@ def test_ai_quiescence_avoids_horizon_blunder():
     """Quiescence regression: our Tiger (rank 6) is tempted to capture an
     undefended-looking Wolf (rank 4) — but a Black Lion (rank 7) is one step
     from recapturing. The AI must see through the depth-2 horizon and avoid
-    losing Tiger for Wolf."""
+    losing Tiger for Wolf.
+
+    The tactic sits on the left edge (col 0), away from the central den file,
+    and Blue is up material with its den defended — so the position is *not*
+    lost and avoiding the bad trade is genuinely best. (An earlier version put
+    this on the den file, where Black actually had an unstoppable den dash,
+    making the 'blunder' the longest-resisting move.)
+    """
     gs = make_gs(
-        (3, 4, Color.BLUE, Animal.TIGER),     # our attacker (rank 6)
-        (3, 5, Color.BLACK, Animal.WOLF),     # tempting victim (rank 4)
-        (3, 6, Color.BLACK, Animal.LION),     # defender (rank 7) > Tiger
-        (0, 8, Color.BLUE, Animal.RAT),       # filler
-        (6, 0, Color.BLACK, Animal.CAT),      # filler
+        (0, 4, Color.BLUE, Animal.TIGER),     # our attacker (rank 6)
+        (0, 5, Color.BLACK, Animal.WOLF),     # tempting victim (rank 4)
+        (0, 6, Color.BLACK, Animal.LION),     # defender (rank 7) > Tiger
+        (6, 8, Color.BLUE, Animal.ELEPHANT),  # Blue up material + home defense
+        (5, 8, Color.BLUE, Animal.LION),
+        (6, 0, Color.BLACK, Animal.RAT),      # filler
     )
     gs.turn = Color.BLUE
     ai = AIPlayer(Color.BLUE, difficulty=0)
     move = ai.get_best_move(gs)
     assert move is not None
-    bad = (move.fc, move.fr, move.tc, move.tr) == (3, 4, 3, 5)
+    bad = (move.fc, move.fr, move.tc, move.tr) == (0, 4, 0, 5)
     assert not bad, "AI fell for the horizon trap (Tiger captured defended Wolf)"
 
 
