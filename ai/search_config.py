@@ -55,6 +55,8 @@ class SearchConfig:
                                          # an O(n log n) mid-search eviction sort)
     use_tt_static_eval: bool = True      # reuse static evals cached in the TT
     use_qsearch_tt_move: bool = True     # try the TT best move first in quiescence
+    use_stability_time: bool = True      # best-move-stability time management:
+                                         # bank unused budget, extend on instability
 
     # --- Tuning margins (in the same centipawn-like scale as PIECE_VALUES) ---
     rfp_margin: int = 120                 # per ply of depth

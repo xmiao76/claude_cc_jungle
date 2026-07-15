@@ -32,6 +32,8 @@ from config import (
     NMP_REDUCTION, NMP_MIN_DEPTH, NMP_MIN_PIECES,
     LMR_MIN_DEPTH, LMR_MOVES_BEFORE,
     ASPIRATION_DELTA, ASPIRATION_MIN_DEPTH,
+    STABILITY_STOP_ITERS, STABILITY_STOP_MIN_DEPTH, STABILITY_STOP_FRAC,
+    TIME_BANK_MAX_FRAC, TIME_EXTEND_MAX_FRAC,
     USE_OPENING_BOOK,
     DEN_BLACK, DEN_BLUE,
 )
@@ -101,6 +103,10 @@ class AIPlayer:
         # of every pre-root position hash.
         self._root_hist_len = 0
         self._pre_root_counts: dict[int, int] = {}
+        # Stability time management (use_stability_time): unused nominal budget
+        # banked across this player's moves, spendable on unstable searches.
+        self._time_bank = 0.0
+        self._base_time_limit = 0.0
 
     # ------------------------------------------------------------------
     # Public entry
@@ -135,8 +141,22 @@ class AIPlayer:
         if self.difficulty == 1:
             self._time_limit = 999_999.0
             return self._search_fixed_depth(state, AI_DEPTH_MEDIUM)
-        self._time_limit = time_budget_ms / 1000.0
-        return self._search_iterative_deepening(state)
+
+        base = time_budget_ms / 1000.0
+        self._base_time_limit = base
+        if self.cfg.use_stability_time:
+            # The hard limit may be extended from the bank; the deepening loop
+            # only draws on the extension while the best move is unstable.
+            self._time_limit = base + min(self._time_bank,
+                                          base * TIME_EXTEND_MAX_FRAC)
+        else:
+            self._time_limit = base
+        move = self._search_iterative_deepening(state)
+        if self.cfg.use_stability_time:
+            used = time.perf_counter() - self._start_time
+            bank = self._time_bank + (base - used)
+            self._time_bank = min(max(bank, 0.0), base * TIME_BANK_MAX_FRAC)
+        return move
 
     # ------------------------------------------------------------------
     # Search drivers
@@ -153,6 +173,9 @@ class AIPlayer:
         self._best_move_root = best_move
         prev_score: int | None = None
         last_iter_dur = 0.0
+        use_stability = self.cfg.use_stability_time
+        base_limit = self._base_time_limit
+        stable_iters = 0   # consecutive completed iterations with the same best
         for depth in range(1, 32):
             # ---- Smart time: decide whether to START this iteration ----
             elapsed = time.perf_counter() - self._start_time
@@ -160,10 +183,17 @@ class AIPlayer:
                 # Always complete depth 1; otherwise skip an iteration predicted
                 # to overrun the budget (its partial result wouldn't beat the
                 # full result we already have).
-                if (depth > 1 and last_iter_dur > 0.0
-                        and elapsed + last_iter_dur * _NEXT_ITER_FACTOR
-                        > self._time_limit):
-                    break
+                if depth > 1 and last_iter_dur > 0.0:
+                    if use_stability:
+                        # A search whose best move just changed may dip into
+                        # the banked extension; a stable one is held to the
+                        # nominal budget.
+                        start_limit = (self._time_limit if stable_iters == 0
+                                       else base_limit)
+                    else:
+                        start_limit = self._time_limit
+                    if elapsed + last_iter_dur * _NEXT_ITER_FACTOR > start_limit:
+                        break
             elif self._time_expired():
                 break
 
@@ -191,6 +221,10 @@ class AIPlayer:
                 score = self._negamax_root(state, depth, -_INF, _INF)
 
             if not self._stopped and self._best_move_root is not None:
+                if self._best_move_root == best_move:
+                    stable_iters += 1
+                else:
+                    stable_iters = 0
                 best_move = self._best_move_root
                 prev_score = score
                 self._last_depth = depth
@@ -204,6 +238,13 @@ class AIPlayer:
             # Age history between iterations.
             self._age_history()
             if self._time_expired():
+                break
+            # ---- Stability early stop: bank the rest of the nominal budget ----
+            if (use_stability
+                    and stable_iters >= STABILITY_STOP_ITERS
+                    and self._last_depth >= STABILITY_STOP_MIN_DEPTH
+                    and time.perf_counter() - self._start_time
+                    >= STABILITY_STOP_FRAC * base_limit):
                 break
         return best_move
 

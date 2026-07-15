@@ -178,6 +178,15 @@ LMR_MOVES_BEFORE = 4       # number of full-depth moves before reductions kick i
 ASPIRATION_DELTA = 50
 ASPIRATION_MIN_DEPTH = 4
 
+# Stability-based time management (v1.4, use_stability_time). Unused nominal
+# budget accumulates in a per-player bank; searches whose best move keeps
+# flipping may draw an extension from it, while stable searches stop early.
+STABILITY_STOP_ITERS = 3       # consecutive same-best iterations before early stop
+STABILITY_STOP_MIN_DEPTH = 6   # never early-stop below this completed depth
+STABILITY_STOP_FRAC = 0.4      # min fraction of the nominal budget used first
+TIME_BANK_MAX_FRAC = 2.0       # bank cap, as a multiple of the nominal budget
+TIME_EXTEND_MAX_FRAC = 0.5     # max per-move extension drawn from the bank
+
 # ---------------------------------------------------------------------------
 # Versioning
 # ---------------------------------------------------------------------------

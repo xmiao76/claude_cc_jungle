@@ -321,6 +321,35 @@ def test_v13_signature_reproduces_13_engine():
         == (1, 7, 2, 7, 1049)
 
 
+def test_stability_time_extension_capped():
+    """A banked surplus extends the hard limit, capped at +50% of nominal."""
+    ai = AIPlayer(Color.BLUE, 2, strong_config())
+    ai._time_bank = 10.0
+    ai.get_best_move(midgame(), time_budget_ms=300)
+    assert 0.3 <= ai._time_limit <= 0.3 * 1.5 + 1e-9
+
+
+def test_stability_time_off_keeps_nominal_limit():
+    """With the flag off (v13/baseline), the bank must never be applied."""
+    cfg = replace(strong_config(), use_stability_time=False)
+    ai = AIPlayer(Color.BLUE, 2, cfg)
+    ai._time_bank = 10.0
+    ai.get_best_move(midgame(), time_budget_ms=300)
+    assert ai._time_limit == 0.3
+
+
+def test_stability_time_banks_unused_budget():
+    """A trivial position (mate on the board) finishes early and banks time."""
+    gs = make_gs(
+        (3, 1, Color.BLUE, Animal.WOLF),
+        (6, 8, Color.BLACK, Animal.ELEPHANT),
+    )
+    gs.turn = Color.BLUE
+    ai = AIPlayer(Color.BLUE, 2, strong_config())
+    ai.get_best_move(gs, time_budget_ms=800)
+    assert ai._time_bank > 0.0
+
+
 def test_tt_static_eval_cache_is_search_neutral():
     """Reusing cached static evals must not change any search decision —
     identical best move and node count, only wall-time improves."""
