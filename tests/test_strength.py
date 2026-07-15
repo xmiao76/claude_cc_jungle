@@ -12,7 +12,10 @@ from engine.board import Board
 from engine.game_state import GameState
 from engine.pieces import Animal, Color, make_piece_id
 from ai.minimax import AIPlayer
-from ai.search_config import SearchConfig, baseline_config, strong_config
+from ai.search_config import (
+    SearchConfig, baseline_config, strong_config, v13_strong_config,
+    _V13_BOOL_FLAGS,
+)
 from tools.strength_harness import play_match, play_one
 from config import DEN_BLACK
 
@@ -198,6 +201,51 @@ def test_tiny_budget_returns_legal_move():
     move = ai.get_best_move(gs, time_budget_ms=1)
     assert move is not None
     assert (move.fc, move.fr, move.tc, move.tr) in legal
+
+
+# ---------------------------------------------------------------------------
+# v1.3 engine freeze — regression control for the strength gate
+# ---------------------------------------------------------------------------
+# The (move, nodes) tuples below were captured at the 1.3 release commit with
+# fixed-depth searches. They pin the *behavior* of the flag-off code paths:
+# if one of these fails, an engine change leaked outside its SearchConfig flag
+# and "selfplay --a strong --b v13" no longer measures the 1.3 engine.
+
+def _fixed_depth_signature(cfg: SearchConfig, gs: GameState, difficulty: int):
+    ai = AIPlayer(gs.turn, difficulty, cfg)
+    move = ai.get_best_move(gs)
+    return (move.fc, move.fr, move.tc, move.tr, ai._nodes)
+
+
+def _start_position() -> GameState:
+    gs = GameState()
+    gs.new_game()
+    return gs
+
+
+def test_v13_flags_match_the_13_release():
+    """v13 = every 1.3-era bool flag on, every newer bool flag off."""
+    v13 = v13_strong_config()
+    for f in fields(SearchConfig):
+        if isinstance(f.default, bool):
+            expected = f.name in _V13_BOOL_FLAGS
+            assert getattr(v13, f.name) is expected, f.name
+
+
+def test_v13_signature_reproduces_13_engine():
+    """v13 search behavior is byte-identical to the shipped 1.3 engine."""
+    assert _fixed_depth_signature(v13_strong_config(), midgame(), 1) \
+        == (6, 6, 6, 5, 3793)
+    assert _fixed_depth_signature(v13_strong_config(), _start_position(), 0) \
+        == (1, 7, 2, 7, 1049)
+
+
+def test_baseline_signature_immutable():
+    """The all-off engine (harness control) never changes behavior."""
+    assert _fixed_depth_signature(baseline_config(), midgame(), 1) \
+        == (6, 6, 6, 5, 5343)
+    assert _fixed_depth_signature(baseline_config(), _start_position(), 0) \
+        == (6, 6, 6, 5, 1785)
 
 
 # ---------------------------------------------------------------------------

@@ -60,6 +60,40 @@ def strong_config() -> SearchConfig:
     return SearchConfig()
 
 
+# The exact bool flag-set of the v1.3 shipped engine, frozen so the 1.3 engine
+# stays reproducible as an A/B regression control after strong_config() gains
+# new flags. Any bool flag added after 1.3 is NOT in this set and is therefore
+# automatically False in v13_strong_config().
+_V13_BOOL_FLAGS = frozenset({
+    "use_mvv_lva_fix",
+    "use_see_ordering",
+    "use_rfp",
+    "use_razoring",
+    "use_futility",
+    "use_lmp",
+    "use_partial_iteration",
+    "use_smart_time",
+    "use_pst",
+    "use_den_threat",
+    "use_noisy_den_quiescence",
+})
+
+
+def v13_strong_config() -> SearchConfig:
+    """Return the shipped v1.3 engine configuration, frozen for regression A/B.
+
+    Every bool flag in :data:`_V13_BOOL_FLAGS` is True, every other bool flag
+    (i.e. anything added after 1.3) is False, and tuning margins keep their
+    defaults. ``selfplay --a strong --b v13`` measures exactly what the new
+    engine gained over the 1.3 release.
+    """
+    bool_overrides = {
+        f.name: (f.name in _V13_BOOL_FLAGS)
+        for f in fields(SearchConfig) if isinstance(f.default, bool)
+    }
+    return replace(SearchConfig(), **bool_overrides)
+
+
 def baseline_config() -> SearchConfig:
     """Return a configuration with every enhancement disabled.
 
