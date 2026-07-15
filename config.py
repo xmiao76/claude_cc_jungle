@@ -191,7 +191,7 @@ TIME_EXTEND_MAX_FRAC = 0.5     # max per-move extension drawn from the bank
 # Versioning
 # ---------------------------------------------------------------------------
 
-VERSION = "1.3"
+VERSION = "1.4"
 
 # ---------------------------------------------------------------------------
 # Custom pygame event IDs (registered at runtime)

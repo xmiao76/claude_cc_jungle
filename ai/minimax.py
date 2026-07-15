@@ -4,10 +4,14 @@
 - Late Move Reductions (LMR)
 - Mate-distance scoring
 - Aspiration windows
-- Repetition / 50-move draw recognition
-- TT in main search and quiescence
+- Repetition / 50-move draw recognition (v1.4: path-cycle / third-visit rule
+  instead of draw-on-any-first-recurrence)
+- TT in main search and quiescence (v1.4: generation aging, O(1) eviction,
+  cached static evals, TT move tried first in quiescence)
 - Killer / counter-move / history heuristics with aging
-- SEE-pruned quiescence with delta pruning
+- SEE-pruned quiescence with delta pruning (v1.4: dedicated noisy-move
+  generator and non-terminal eval on the hot paths)
+- Stability-based time management with a per-player time bank (v1.4)
 - Optional opening book
 """
 

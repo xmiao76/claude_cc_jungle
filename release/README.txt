@@ -1,17 +1,37 @@
 JUNGLE - THE BOARD GAME
 =======================
-Version 1.3 | Windows Desktop
+Version 1.4 | Windows Desktop
 
 
 AUTHORSHIP
 ----------
-Designed and implemented by an AI coding agent: Anthropic's Claude Opus 4.8
-(model "claude-opus-4-8"), running at "max" effort, via Claude Code (Anthropic's
-official command-line coding agent). The architecture, gameplay logic, AI engine,
-GUI, automated tests, and packaging were all generated programmatically; no
-third-party code was incorporated.
-  Initial generation : 2026-04-23
-  Latest engine update: 2026-06-19 (Claude Opus 4.8, max effort, via Claude Code)
+Designed and implemented by AI coding agents via Claude Code (Anthropic's
+official command-line coding agent). The architecture, gameplay logic, AI
+engine, GUI, automated tests, and packaging were all generated
+programmatically; no third-party code was incorporated.
+  Initial generation  : 2026-04-23 (Claude Opus 4.8, model "claude-opus-4-8",
+                        max effort, via Claude Code)
+  1.2-1.3 engine work : 2026-06-19 (Claude Opus 4.8, max effort, via Claude Code)
+  1.4 engine update   : 2026-07-15 (Claude Fable 5, model "claude-fable-5",
+                        max effort, via Claude Code)
+
+WHAT'S NEW IN 1.4
+-----------------
+  The AI engine is measurably stronger than 1.3 (self-play at equal time:
+  56.5% score over 400 games against the built-in 1.3 engine, ~+45 Elo,
+  consistent across two independent 200-game matches):
+  - About 1.7x faster search: a dedicated capture generator and a leaner
+    evaluation let the engine look a full move deeper in the same time.
+  - Fixed a subtle scoring bug that made the engine treat winning lines as
+    draws whenever they passed through a position it had seen once before.
+  - Smarter transposition table: it now remembers evaluations, ages out
+    stale entries between moves, and no longer stalls mid-move when it
+    fills up during long games.
+  - Better time management: the engine banks unused thinking time on easy
+    moves and spends it when the position turns critical (Hard may briefly
+    think up to ~3s on a difficult move; the average stays ~2s).
+  - The 1.3 engine ships inside the code as a frozen sparring partner
+    ("v13") so every future change is measured against the previous release.
 
 WHAT'S NEW IN 1.3
 -----------------
@@ -121,7 +141,9 @@ DIFFICULTY LEVELS
 -----------------
   Easy    - Looks 2 moves ahead. Good for learning.
   Medium  - Looks 4 moves ahead. A real challenge.
-  Hard    - Uses up to 2-second search. Plays a strong strategic game.
+  Hard    - Time-managed search (~2s per move on average; it saves up unused
+            time and may think up to ~3s on critical moves). Plays a strong
+            strategic game.
 
 
 AI VS AI MODE
