@@ -50,6 +50,11 @@ class SearchConfig:
                                          # (legacy: draw on ANY first recurrence)
     use_fast_movegen: bool = True        # dedicated noisy-move generator +
                                          # non-terminal eval on hot search paths
+    use_tt_generation: bool = True       # TT generation aging + O(1) eviction
+                                         # (legacy: stale-deep-entry blocking and
+                                         # an O(n log n) mid-search eviction sort)
+    use_tt_static_eval: bool = True      # reuse static evals cached in the TT
+    use_qsearch_tt_move: bool = True     # try the TT best move first in quiescence
 
     # --- Tuning margins (in the same centipawn-like scale as PIECE_VALUES) ---
     rfp_margin: int = 120                 # per ply of depth

@@ -81,7 +81,7 @@ class AIPlayer:
         self.color = color
         self.difficulty = difficulty
         self.cfg = cfg or strong_config()
-        self._tt = TranspositionTable()
+        self._tt = TranspositionTable(generation_aging=self.cfg.use_tt_generation)
         self._nodes = 0
         self._last_depth = 0          # last fully-completed search depth (for bench)
         self._seldepth = 0            # max ply reached including quiescence
@@ -126,6 +126,8 @@ class AIPlayer:
         self._start_time = time.perf_counter()
         self._reset_search_heuristics()
         self._setup_repetition_tracking(state)
+        if self.cfg.use_tt_generation:
+            self._tt.new_search()
 
         if self.difficulty == 0:
             self._time_limit = 999_999.0
@@ -423,8 +425,12 @@ class AIPlayer:
         if not is_pv and not_mate_window:
             # Moves are already generated and non-empty here, so the terminal
             # checks inside evaluate() can never fire — skip them when the
-            # fast path is enabled.
-            if self.cfg.use_fast_movegen:
+            # fast path is enabled. A static eval cached in the TT is reused
+            # outright (identical value, so search decisions are unchanged).
+            if (self.cfg.use_tt_static_eval and tt_entry is not None
+                    and tt_entry.static_eval is not None):
+                static_eval = tt_entry.static_eval
+            elif self.cfg.use_fast_movegen:
                 static_eval = evaluate_nonterminal(state, state.turn, self.cfg)
             else:
                 static_eval = evaluate(state, state.turn, self.cfg)
@@ -447,7 +453,10 @@ class AIPlayer:
         if (allow_null and not is_pv and depth >= NMP_MIN_DEPTH
                 and state.board.alive_count(state.turn) >= NMP_MIN_PIECES):
             if static_eval is None:
-                if self.cfg.use_fast_movegen:
+                if (self.cfg.use_tt_static_eval and tt_entry is not None
+                        and tt_entry.static_eval is not None):
+                    static_eval = tt_entry.static_eval
+                elif self.cfg.use_fast_movegen:
                     static_eval = evaluate_nonterminal(state, state.turn, self.cfg)
                 else:
                     static_eval = evaluate(state, state.turn, self.cfg)
@@ -551,7 +560,7 @@ class AIPlayer:
             elif best_score >= beta:
                 flag = TT_LOWER
             self._tt.put(tt_key, depth, _tt_score_to_store(best_score, ply),
-                         flag, best_move)
+                         flag, best_move, static_eval)
 
         return best_score
 
@@ -588,8 +597,12 @@ class AIPlayer:
         # Stand-pat: the fast path skips the stalemate detection inside
         # evaluate() (state.result was checked above; a full legal-move
         # generation per leaf just to catch the rare no-move stalemate would
-        # double the quiescence cost).
-        if self.cfg.use_fast_movegen:
+        # double the quiescence cost). A TT-cached static eval is identical
+        # by construction, so it is reused outright.
+        if (self.cfg.use_tt_static_eval and tt_entry is not None
+                and tt_entry.static_eval is not None):
+            stand_pat = tt_entry.static_eval
+        elif self.cfg.use_fast_movegen:
             stand_pat = evaluate_nonterminal(state, state.turn, self.cfg)
         else:
             stand_pat = evaluate(state, state.turn, self.cfg)
@@ -612,10 +625,15 @@ class AIPlayer:
         else:
             moves = generate_capture_moves(board, state.turn)
         # MVV-LVA ordering (least-valuable attacker breaks victim ties), then SEE
-        # filter. Den-entry moves (winning) sort first.
+        # filter. Den-entry moves (winning) sort first; the TT best move (if
+        # enabled) in front of everything.
         if self.cfg.use_mvv_lva_fix:
-            moves.sort(key=lambda m: (-1_000_000 if (m.tc, m.tr) == opp_den
-                                      else -abs(m.captured) * 16 + abs(board.get(m.fc, m.fr))))
+            qs_tt = tt_entry.best_move if (self.cfg.use_qsearch_tt_move
+                                           and tt_entry is not None) else None
+            moves.sort(key=lambda m: (
+                -2_000_000 if m == qs_tt
+                else -1_000_000 if (m.tc, m.tr) == opp_den
+                else -abs(m.captured) * 16 + abs(board.get(m.fc, m.fr))))
         else:
             moves.sort(key=lambda m: -abs(m.captured))
 

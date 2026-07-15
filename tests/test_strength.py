@@ -6,7 +6,7 @@ statistical win-rate gauntlet lives in ``tools/strength_harness.py`` and is run
 manually (see the plan's Validation Commands).
 """
 
-from dataclasses import fields
+from dataclasses import fields, replace
 
 from engine.board import Board
 from engine.game_state import GameState
@@ -319,6 +319,15 @@ def test_v13_signature_reproduces_13_engine():
         == (6, 6, 6, 5, 3793)
     assert _fixed_depth_signature(v13_strong_config(), _start_position(), 0) \
         == (1, 7, 2, 7, 1049)
+
+
+def test_tt_static_eval_cache_is_search_neutral():
+    """Reusing cached static evals must not change any search decision —
+    identical best move and node count, only wall-time improves."""
+    on = replace(strong_config(), use_tt_static_eval=True)
+    off = replace(strong_config(), use_tt_static_eval=False)
+    assert _fixed_depth_signature(on, midgame(), 1) \
+        == _fixed_depth_signature(off, midgame(), 1)
 
 
 def test_baseline_signature_immutable():
