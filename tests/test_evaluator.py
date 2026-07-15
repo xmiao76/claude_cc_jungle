@@ -20,6 +20,27 @@ def make_gs(*piece_specs) -> GameState:
     return gs
 
 
+def test_evaluate_nonterminal_matches_evaluate_on_live_positions():
+    """The hot-path eval (skips terminal detection) must agree with evaluate()
+    on every non-terminal position, for both enhanced and baseline configs."""
+    import random
+    from ai.evaluator import evaluate_nonterminal
+    from ai.search_config import baseline_config, strong_config
+
+    rng = random.Random(99)
+    configs = (strong_config(), baseline_config(), None)
+    gs = GameState()
+    gs.new_game()
+    for _ in range(80):
+        if gs.is_terminal():
+            break
+        for cfg in configs:
+            for color in (Color.BLUE, Color.BLACK):
+                assert evaluate_nonterminal(gs, color, cfg) \
+                    == evaluate(gs, color, cfg)
+        gs.apply_move(rng.choice(gs.legal_moves()))
+
+
 def test_evaluate_starting_position_is_symmetric():
     """Initial position is mirror-symmetric in material; eval from either side
     should be near zero and exact negatives of each other."""

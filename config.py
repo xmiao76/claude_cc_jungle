@@ -129,7 +129,6 @@ EVAL_WEIGHTS = {
     "trap_control": 80,
     # Added in stronger-engine refactor
     "mobility": 2,                 # per-extra-pseudo-move
-    "threat": 8,                   # per-attacker × victim_value/100
     "den_defender": 25,            # per friendly piece within 2 of own den
     "jump_ready": 20,              # Lion/Tiger has at least one jump available
     "rat_blocks_river": 35,        # our rat sits on river square

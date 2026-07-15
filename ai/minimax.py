@@ -17,9 +17,11 @@ import time
 
 from engine.board import Move
 from engine.game_state import GameState
-from engine.move_generator import generate_capture_moves, generate_noisy_moves
+from engine.move_generator import (
+    generate_capture_moves, generate_noisy_moves, generate_noisy_only,
+)
 from engine.pieces import Color
-from ai.evaluator import evaluate, _INF
+from ai.evaluator import evaluate, evaluate_nonterminal, _INF
 from ai.transposition import TranspositionTable, TT_EXACT, TT_LOWER, TT_UPPER
 from ai.see import see_capture
 from ai import opening_book
@@ -419,7 +421,13 @@ class AIPlayer:
         static_eval: int | None = None
         not_mate_window = abs(beta) < _MATE_BOUND and abs(alpha) < _MATE_BOUND
         if not is_pv and not_mate_window:
-            static_eval = evaluate(state, state.turn, self.cfg)
+            # Moves are already generated and non-empty here, so the terminal
+            # checks inside evaluate() can never fire — skip them when the
+            # fast path is enabled.
+            if self.cfg.use_fast_movegen:
+                static_eval = evaluate_nonterminal(state, state.turn, self.cfg)
+            else:
+                static_eval = evaluate(state, state.turn, self.cfg)
 
             # ---- Reverse futility pruning (a.k.a. static null move) ----
             if (self.cfg.use_rfp and depth <= self.cfg.rfp_max_depth
@@ -439,7 +447,10 @@ class AIPlayer:
         if (allow_null and not is_pv and depth >= NMP_MIN_DEPTH
                 and state.board.alive_count(state.turn) >= NMP_MIN_PIECES):
             if static_eval is None:
-                static_eval = evaluate(state, state.turn, self.cfg)
+                if self.cfg.use_fast_movegen:
+                    static_eval = evaluate_nonterminal(state, state.turn, self.cfg)
+                else:
+                    static_eval = evaluate(state, state.turn, self.cfg)
             if static_eval >= beta:
                 state.apply_null()
                 null_score = -self._negamax(state, depth - 1 - NMP_REDUCTION,
@@ -574,7 +585,14 @@ class AIPlayer:
             if tt_entry.flag == TT_UPPER and tt_score <= alpha:
                 return tt_score
 
-        stand_pat = evaluate(state, state.turn, self.cfg)
+        # Stand-pat: the fast path skips the stalemate detection inside
+        # evaluate() (state.result was checked above; a full legal-move
+        # generation per leaf just to catch the rare no-move stalemate would
+        # double the quiescence cost).
+        if self.cfg.use_fast_movegen:
+            stand_pat = evaluate_nonterminal(state, state.turn, self.cfg)
+        else:
+            stand_pat = evaluate(state, state.turn, self.cfg)
         if qply >= QUIESCENCE_MAX_PLY:
             return stand_pat
         if stand_pat >= beta:
@@ -585,7 +603,11 @@ class AIPlayer:
         delta_margin = EVAL_WEIGHTS["delta_margin"]
         board = state.board
         opp_den = DEN_BLACK if state.turn == Color.BLUE else DEN_BLUE
-        if self.cfg.use_noisy_den_quiescence:
+        if self.cfg.use_fast_movegen:
+            moves = generate_noisy_only(board, state.turn)
+            if not self.cfg.use_noisy_den_quiescence:
+                moves = [m for m in moves if m.captured]
+        elif self.cfg.use_noisy_den_quiescence:
             moves = generate_noisy_moves(board, state.turn)
         else:
             moves = generate_capture_moves(board, state.turn)

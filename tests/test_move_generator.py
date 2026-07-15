@@ -171,6 +171,33 @@ def test_non_rat_cannot_enter_river():
 
 
 # ---------------------------------------------------------------------------
+# Test 11: dedicated noisy-only generator (v1.4 speed pack) is behaviorally
+# identical to filtering the full legal-move generation
+# ---------------------------------------------------------------------------
+
+def test_noisy_only_matches_filtered_full_generation():
+    import random
+    from engine.game_state import GameState
+    from engine.move_generator import generate_noisy_moves, generate_noisy_only
+
+    rng = random.Random(20260715)
+    for game in range(6):
+        gs = GameState()
+        gs.new_game()
+        for _ in range(60):
+            if gs.is_terminal():
+                break
+            for color in (Color.BLUE, Color.BLACK):
+                fast = set(generate_noisy_only(gs.board, color))
+                slow = set(generate_noisy_moves(gs.board, color))
+                assert fast == slow, (
+                    f"noisy-only mismatch (game {game}): "
+                    f"extra={fast - slow} missing={slow - fast}"
+                )
+            gs.apply_move(rng.choice(gs.legal_moves()))
+
+
+# ---------------------------------------------------------------------------
 # Test 11: Moving to own den is illegal
 # ---------------------------------------------------------------------------
 

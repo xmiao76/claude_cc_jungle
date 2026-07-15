@@ -38,39 +38,43 @@ def can_capture(attacker_pid: int, defender_pid: int,
     - Otherwise: attacker effective_rank >= defender effective_rank.
     - Special: Rat can capture Rat regardless of water boundary as long as both are
       on the same terrain type (water-water or land-land).
+
+    This is the hottest predicate in the engine (called per adjacent enemy in
+    move generation and repeatedly in SEE), so it works on plain int ranks
+    (Animal is an IntEnum: Rat == 1, Elephant == 8).
     """
-    atk_color = piece_id_color(attacker_pid)
-    def_color = piece_id_color(defender_pid)
+    atk_blue = attacker_pid > 0
 
     # Must be enemies
-    if atk_color == def_color:
+    if atk_blue == (defender_pid > 0):
         return False
 
-    atk_animal = piece_id_animal(attacker_pid)
-    def_animal = piece_id_animal(defender_pid)
-
-    atk_in_water = TERRAIN[atk_col][atk_row] == TERRAIN_RIVER
-    def_in_water = TERRAIN[def_col][def_row] == TERRAIN_RIVER
+    atk_rank = attacker_pid if atk_blue else -attacker_pid
+    def_rank = defender_pid if defender_pid > 0 else -defender_pid
 
     # Rat-specific cross-boundary rules
-    if atk_animal == Animal.RAT or def_animal == Animal.RAT:
+    if atk_rank == 1 or def_rank == 1:
+        atk_in_water = TERRAIN[atk_col][atk_row] == TERRAIN_RIVER
+        def_in_water = TERRAIN[def_col][def_row] == TERRAIN_RIVER
         # A piece in water is invulnerable to attacks from land pieces
         # (and vice versa) — except rat vs rat on same terrain type
         if atk_in_water != def_in_water:
             return False
         # Both on same terrain: Rat can capture Rat freely
-        if atk_animal == Animal.RAT and def_animal == Animal.RAT:
+        if atk_rank == 1 and def_rank == 1:
             return True
         # Rat on land can capture Elephant on land
-        if atk_animal == Animal.RAT and def_animal == Animal.ELEPHANT:
+        if atk_rank == 1 and def_rank == 8:
             return not atk_in_water  # attacker must be on land
         # Elephant can NOT capture Rat (Rat beats Elephant in rank hierarchy)
-        if atk_animal == Animal.ELEPHANT and def_animal == Animal.RAT:
+        if atk_rank == 8 and def_rank == 1:
             return False
 
-    # General rank comparison using effective ranks
-    atk_eff = effective_rank(attacker_pid, atk_col, atk_row)
-    def_eff = effective_rank(defender_pid, def_col, def_row)
+    # General rank comparison using effective ranks (opponent's trap = rank 0)
+    atk_eff = 0 if (atk_col, atk_row) in (TRAPS_BLACK if atk_blue else TRAPS_BLUE) \
+        else atk_rank
+    def_eff = 0 if (def_col, def_row) in (TRAPS_BLACK if defender_pid > 0 else TRAPS_BLUE) \
+        else def_rank
     return atk_eff >= def_eff
 
 

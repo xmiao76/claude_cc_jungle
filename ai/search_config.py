@@ -48,6 +48,8 @@ class SearchConfig:
     # --- v1.4 enhancements (not in v13_strong_config) ---
     use_search_repetition: bool = True   # path-cycle / third-visit repetition rule
                                          # (legacy: draw on ANY first recurrence)
+    use_fast_movegen: bool = True        # dedicated noisy-move generator +
+                                         # non-terminal eval on hot search paths
 
     # --- Tuning margins (in the same centipawn-like scale as PIECE_VALUES) ---
     rfp_margin: int = 120                 # per ply of depth

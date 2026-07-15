@@ -7,11 +7,17 @@ from config import (
     DEN_BLACK, DEN_BLUE,
 )
 from engine.board import Board, Move
-from engine.pieces import Animal, Color, piece_id_color, piece_id_animal
+from engine.pieces import Animal, Color
 from engine.rules import can_capture, is_jump_blocked
 
 # Cardinal directions
 _DIRS = [(0, -1), (0, 1), (-1, 0), (1, 0)]
+
+# Integer ranks for the hot loops (Animal is an IntEnum; comparing plain ints
+# avoids constructing an enum per piece per node).
+_RAT = int(Animal.RAT)
+_TIGER = int(Animal.TIGER)
+_LION = int(Animal.LION)
 
 # Precomputed jump endpoints for Lion and Tiger.
 # For each starting square on the edge of a river block, store a list of
@@ -89,47 +95,111 @@ def generate_noisy_moves(board: Board, color: Color) -> list[Move]:
             if m.captured != 0 or (m.tc, m.tr) == opp_den]
 
 
+def generate_noisy_only(board: Board, color: Color) -> list[Move]:
+    """Captures + den entries, generated directly (v1.4 speed pack).
+
+    Behaviorally identical to :func:`generate_noisy_moves`, but never builds
+    the (much larger) quiet-move list. Quiescence calls this at every node,
+    where quiet moves are generated only to be thrown away by the filter.
+    """
+    moves: list[Move] = []
+    append = moves.append
+    get = board.get
+    terrain = TERRAIN
+    jump_table_get = _JUMP_TABLE.get
+    cols = COLS
+    rows = ROWS
+    is_blue = color == Color.BLUE
+    own_den = DEN_BLUE if is_blue else DEN_BLACK
+    opp_den = DEN_BLACK if is_blue else DEN_BLUE
+
+    for pid, (c, r) in board.pieces_of(color).items():
+        rank = pid if pid > 0 else -pid
+
+        # --- Normal steps ---
+        for (dc, dr) in _DIRS:
+            nc = c + dc
+            nr = r + dr
+            if not (0 <= nc < cols and 0 <= nr < rows):
+                continue
+            if (nc, nr) == own_den:
+                continue
+            if terrain[nc][nr] == TERRAIN_RIVER and rank != _RAT:
+                continue
+            target_pid = get(nc, nr)
+            if target_pid == 0:
+                if (nc, nr) == opp_den:
+                    append(Move(c, r, nc, nr, 0))
+            elif (target_pid > 0) != is_blue:
+                if can_capture(pid, target_pid, c, r, nc, nr, board):
+                    append(Move(c, r, nc, nr, target_pid))
+
+        # --- River jumps (Lion and Tiger only) ---
+        if rank == _LION or rank == _TIGER:
+            for (dc, dr, lc, lr) in jump_table_get((c, r), ()):
+                if rank == _TIGER and dc == 0:
+                    continue   # Tiger: horizontal (2-square) jumps only
+                if (lc, lr) == own_den:
+                    continue
+                if is_jump_blocked(c, r, lc, lr, board):
+                    continue
+                land_pid = get(lc, lr)
+                if land_pid == 0:
+                    if (lc, lr) == opp_den:
+                        append(Move(c, r, lc, lr, 0))
+                elif (land_pid > 0) != is_blue:
+                    if can_capture(pid, land_pid, c, r, lc, lr, board):
+                        append(Move(c, r, lc, lr, land_pid))
+
+    return moves
+
+
 def generate_legal_moves(board: Board, color: Color) -> list[Move]:
     """Generate all legal moves for *color* on *board*."""
     moves: list[Move] = []
-    own_den = DEN_BLUE if color == Color.BLUE else DEN_BLACK
+    append = moves.append
+    get = board.get
+    terrain = TERRAIN
+    jump_table_get = _JUMP_TABLE.get
+    cols = COLS
+    rows = ROWS
+    is_blue = color == Color.BLUE
+    own_den = DEN_BLUE if is_blue else DEN_BLACK
 
-    for pid, (c, r) in list(board.pieces_of(color).items()):
-        animal = piece_id_animal(pid)
+    for pid, (c, r) in board.pieces_of(color).items():
+        rank = pid if pid > 0 else -pid
 
         # --- Normal steps (all pieces) ---
         for (dc, dr) in _DIRS:
-            nc, nr = c + dc, r + dr
-            if not (0 <= nc < COLS and 0 <= nr < ROWS):
+            nc = c + dc
+            nr = r + dr
+            if not (0 <= nc < cols and 0 <= nr < rows):
                 continue
 
             # Cannot enter own den
             if (nc, nr) == own_den:
                 continue
 
-            target_terrain = TERRAIN[nc][nr]
-
             # Only Rat can enter river squares
-            if target_terrain == TERRAIN_RIVER and animal != Animal.RAT:
+            if terrain[nc][nr] == TERRAIN_RIVER and rank != _RAT:
                 continue
 
-            target_pid = board.get(nc, nr)
+            target_pid = get(nc, nr)
 
             if target_pid == 0:
                 # Empty square
-                moves.append(Move(c, r, nc, nr, 0))
-            elif piece_id_color(target_pid) != color:
+                append(Move(c, r, nc, nr, 0))
+            elif (target_pid > 0) != is_blue:
                 # Enemy piece — check capture legality
                 if can_capture(pid, target_pid, c, r, nc, nr, board):
-                    moves.append(Move(c, r, nc, nr, target_pid))
+                    append(Move(c, r, nc, nr, target_pid))
             # else: own piece — skip
 
         # --- River jumps (Lion and Tiger only) ---
-        if animal in (Animal.LION, Animal.TIGER):
-            jump_list = _JUMP_TABLE.get((c, r), [])
-            for (dc, dr, lc, lr) in jump_list:
-                if not _can_jump(animal, dc, dr):
-                    continue
+        if rank == _LION or rank == _TIGER:
+            for (dc, dr, lc, lr) in jump_table_get((c, r), ()):
+                if rank == _TIGER and dc == 0:
+                    continue   # Tiger cannot make the vertical (3-square) jump
                 # Cannot land on own den
                 if (lc, lr) == own_den:
                     continue
@@ -137,11 +207,11 @@ def generate_legal_moves(board: Board, color: Color) -> list[Move]:
                 if is_jump_blocked(c, r, lc, lr, board):
                     continue
                 # Check landing square
-                land_pid = board.get(lc, lr)
+                land_pid = get(lc, lr)
                 if land_pid == 0:
-                    moves.append(Move(c, r, lc, lr, 0))
-                elif piece_id_color(land_pid) != color:
+                    append(Move(c, r, lc, lr, 0))
+                elif (land_pid > 0) != is_blue:
                     if can_capture(pid, land_pid, c, r, lc, lr, board):
-                        moves.append(Move(c, r, lc, lr, land_pid))
+                        append(Move(c, r, lc, lr, land_pid))
 
     return moves
