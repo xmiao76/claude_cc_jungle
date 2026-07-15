@@ -1,11 +1,9 @@
 """Tests for capture legality and terrain effects."""
 
-import pytest
 from engine.board import Board
 from engine.pieces import Animal, Color, make_piece_id
 from engine.rules import can_capture, effective_rank
 from engine.move_generator import generate_legal_moves
-from config import TRAPS_BLACK, TRAPS_BLUE
 
 
 # ---------------------------------------------------------------------------

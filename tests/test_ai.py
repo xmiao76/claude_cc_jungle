@@ -1,13 +1,11 @@
 """Tests for the AI engine."""
 
 import time
-import pytest
-from engine.board import Board, Move
+from engine.board import Board
 from engine.game_state import GameState
 from engine.pieces import Animal, Color, make_piece_id
-from engine.move_generator import generate_legal_moves
 from ai.minimax import AIPlayer
-from config import DEN_BLACK, DEN_BLUE
+from config import DEN_BLACK
 
 
 # ---------------------------------------------------------------------------

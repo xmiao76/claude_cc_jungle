@@ -10,15 +10,14 @@ Zobrist hashing is updated incrementally on make_move / unmake_move.
 from __future__ import annotations
 
 import random
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 from config import (
-    COLS, ROWS, TERRAIN, TERRAIN_RIVER,
-    DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE, RIVER_SQUARES,
+    COLS, ROWS, TERRAIN,
 )
 from engine.pieces import (
-    Animal, Color, STARTING_POSITIONS,
-    make_piece_id, piece_id_color, piece_id_animal, piece_id_rank,
+    Color, STARTING_POSITIONS,
+    make_piece_id, piece_id_color,
 )
 
 # ---------------------------------------------------------------------------

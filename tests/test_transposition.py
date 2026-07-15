@@ -1,7 +1,7 @@
 """Tests for ai/transposition.py."""
 
 from ai.transposition import (
-    TranspositionTable, TT_EXACT, TT_LOWER, TT_UPPER,
+    TranspositionTable, TT_EXACT, TT_LOWER,
 )
 
 

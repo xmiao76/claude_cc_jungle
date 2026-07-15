@@ -1,6 +1,5 @@
 """Tests for move generation covering all special Jungle movement rules."""
 
-import pytest
 from engine.board import Board, Move
 from engine.game_state import GameState
 from engine.pieces import Animal, Color, make_piece_id
@@ -163,7 +162,6 @@ def test_rat_enters_river():
 # ---------------------------------------------------------------------------
 
 def test_non_rat_cannot_enter_river():
-    b = empty_board()
     for animal in [Animal.CAT, Animal.DOG, Animal.WOLF, Animal.LEOPARD,
                    Animal.TIGER, Animal.LION, Animal.ELEPHANT]:
         b2 = empty_board()

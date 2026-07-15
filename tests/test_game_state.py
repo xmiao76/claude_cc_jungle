@@ -1,6 +1,5 @@
 """Tests for GameState: undo/redo, turn tracking, copy."""
 
-import pytest
 from engine.board import Board, Move
 from engine.game_state import GameState
 from engine.pieces import Animal, Color, make_piece_id
@@ -67,8 +66,7 @@ def test_starting_position_layout():
     top-to-bottom mirrors so each player's Elephant sits on their own left side
     (Black Elephant col 6, Blue Elephant col 0)."""
     from engine.pieces import (
-        Animal, Color, make_piece_id,
-        piece_id_color, piece_id_animal,
+        Animal, Color, piece_id_color, piece_id_animal,
     )
     expected = {
         # Black (top)

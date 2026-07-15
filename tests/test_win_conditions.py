@@ -1,11 +1,8 @@
 """Tests for win condition detection."""
 
-import pytest
 from engine.board import Board, Move
 from engine.game_state import GameState
 from engine.pieces import Animal, Color, make_piece_id
-from engine.rules import check_win
-from config import DEN_BLACK, DEN_BLUE
 
 
 # ---------------------------------------------------------------------------
@@ -117,14 +114,7 @@ def test_normal_capture_no_win():
 
 def test_stalemate_loses():
     """Player with no legal moves loses."""
-    # Place Black Rat in a corner with no legal moves AND can't be reached.
-    # Simpler: just test is_terminal and get_winner when no moves available.
-    gs = make_gs_with_pieces(
-        (0, 0, Color.BLUE, Animal.ELEPHANT),
-    )
-    # Blue has Elephant, Black has nothing → Blue already won by capture-all
-    # Instead test stalemate: Black has a piece surrounded by Blue pieces
-    # with no moves. Use a position where Black's piece is boxed in.
+    # Stalemate: Black has a piece surrounded by Blue pieces with no moves.
     gs2 = make_gs_with_pieces(
         (6, 8, Color.BLACK, Animal.RAT),   # corner
         (5, 8, Color.BLUE, Animal.ELEPHANT),  # blocks left

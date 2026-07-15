@@ -151,7 +151,8 @@ class Controller:
                 self._start_game(ava=self.mode_ava)
             elif self._quit_rect and self._quit_rect.collidepoint(mx, my):
                 pygame.quit()
-                import sys; sys.exit(0)
+                import sys
+                sys.exit(0)
             return
 
         # In-game: side-panel buttons take priority

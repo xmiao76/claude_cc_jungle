@@ -5,7 +5,7 @@ from engine.game_state import GameState
 from engine.pieces import Animal, Color, make_piece_id
 from ai.evaluator import evaluate, _INF
 from config import (
-    DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE,
+    TRAPS_BLUE,
     PIECE_VALUES, EVAL_WEIGHTS,
 )
 

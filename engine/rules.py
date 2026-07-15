@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from config import (
-    TERRAIN, TERRAIN_TRAP, TERRAIN_RIVER,
+    TERRAIN, TERRAIN_RIVER,
     DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE,
 )
 from engine.pieces import Animal, Color, piece_id_color, piece_id_animal, piece_id_rank
