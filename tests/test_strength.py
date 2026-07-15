@@ -204,6 +204,87 @@ def test_tiny_budget_returns_legal_move():
 
 
 # ---------------------------------------------------------------------------
+# Search repetition scoring (v1.4, use_search_repetition)
+# ---------------------------------------------------------------------------
+# Legacy rule: any position seen before ANYWHERE (game history or search path)
+# scores 0 on its first recurrence — throwing away wins that pass through a
+# once-seen position. New rule: only in-search-path cycles and third real
+# visits (pre-root count >= 2) are draws.
+
+def _two_lions() -> GameState:
+    gs = make_gs(
+        (0, 8, Color.BLUE, Animal.LION),
+        (6, 0, Color.BLACK, Animal.LION),
+    )
+    gs.turn = Color.BLUE
+    return gs
+
+
+def _play_cycle(gs: GameState) -> None:
+    for sq in ((0, 8, 0, 7), (6, 0, 6, 1), (0, 7, 0, 8), (6, 1, 6, 0)):
+        mv = next(m for m in gs.legal_moves()
+                  if (m.fc, m.fr, m.tc, m.tr) == sq)
+        gs.apply_move(mv)
+
+
+def test_search_repetition_single_pre_root_visit_not_draw():
+    """One earlier game occurrence must not poison the line (new rule),
+    though the legacy (v13) rule scored it as a draw."""
+    gs = _two_lions()
+    _play_cycle(gs)   # current position now occurred once before in the game
+
+    ai_new = AIPlayer(Color.BLUE, 2, strong_config())
+    ai_new._setup_repetition_tracking(gs)
+    assert ai_new._is_search_draw(gs) is False
+
+    ai_old = AIPlayer(Color.BLUE, 2, v13_strong_config())
+    ai_old._setup_repetition_tracking(gs)
+    assert ai_old._is_search_draw(gs) is True
+
+
+def test_search_repetition_third_visit_draws():
+    """Two pre-root occurrences -> the third visit is a draw (shuffle guard)."""
+    gs = _two_lions()
+    _play_cycle(gs)
+    _play_cycle(gs)
+    ai = AIPlayer(Color.BLUE, 2, strong_config())
+    ai._setup_repetition_tracking(gs)
+    assert ai._is_search_draw(gs) is True
+
+
+def test_search_repetition_in_path_cycle_draws():
+    """A cycle occurring entirely inside the search path is a draw."""
+    gs = _two_lions()
+    ai = AIPlayer(Color.BLUE, 2, strong_config())
+    ai._setup_repetition_tracking(gs)   # root = start position
+    _play_cycle(gs)                     # simulate the search path revisiting it
+    assert ai._is_search_draw(gs) is True
+
+
+def test_search_wins_through_once_seen_position():
+    """A winning line through a position seen ONCE earlier in the game must
+    still be found; the legacy rule scored that line 0 and avoided it."""
+    gs = make_gs(
+        (3, 2, Color.BLUE, Animal.WOLF),      # two steps from the Black den
+        (6, 6, Color.BLUE, Animal.ELEPHANT),  # Blue clearly winning on material
+        (0, 3, Color.BLACK, Animal.RAT),
+    )
+    gs.turn = Color.BLUE
+    # Pretend the position after Wolf (3,2)->(3,1) already occurred once.
+    mv = next(m for m in gs.legal_moves()
+              if (m.fc, m.fr, m.tc, m.tr) == (3, 2, 3, 1))
+    gs.apply_move(mv)
+    seen_once = gs.board.turn_hash(gs.turn)
+    gs.undo_move()
+    gs._hash_history.append(seen_once)
+
+    new_move = AIPlayer(Color.BLUE, 0, strong_config()).get_best_move(gs)
+    old_move = AIPlayer(Color.BLUE, 0, v13_strong_config()).get_best_move(gs)
+    assert (new_move.fc, new_move.fr, new_move.tc, new_move.tr) == (3, 2, 3, 1)
+    assert (old_move.fc, old_move.fr, old_move.tc, old_move.tr) != (3, 2, 3, 1)
+
+
+# ---------------------------------------------------------------------------
 # v1.3 engine freeze — regression control for the strength gate
 # ---------------------------------------------------------------------------
 # The (move, nodes) tuples below were captured at the 1.3 release commit with

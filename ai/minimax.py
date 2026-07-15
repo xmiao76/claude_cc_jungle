@@ -94,6 +94,11 @@ class AIPlayer:
         self._history: dict[tuple[int, int, int, int], int] = {}
         # Counter-move heuristic: prev_move_tuple -> reply move.
         self._counter: dict[tuple[int, int, int, int], Move] = {}
+        # Repetition tracking for the current search (use_search_repetition):
+        # length of the game history at the search root, and occurrence counts
+        # of every pre-root position hash.
+        self._root_hist_len = 0
+        self._pre_root_counts: dict[int, int] = {}
 
     # ------------------------------------------------------------------
     # Public entry
@@ -118,6 +123,7 @@ class AIPlayer:
         self._stopped = False
         self._start_time = time.perf_counter()
         self._reset_search_heuristics()
+        self._setup_repetition_tracking(state)
 
         if self.difficulty == 0:
             self._time_limit = 999_999.0
@@ -214,6 +220,45 @@ class AIPlayer:
                 del self._history[k]
             else:
                 self._history[k] = v
+
+    # ------------------------------------------------------------------
+    # Repetition / draw scoring
+    # ------------------------------------------------------------------
+
+    def _setup_repetition_tracking(self, state: GameState) -> None:
+        """Record the search-root boundary and pre-root position counts."""
+        hist = state._hash_history
+        self._root_hist_len = len(hist)
+        counts: dict[int, int] = {}
+        for h in hist:
+            counts[h] = counts.get(h, 0) + 1
+        self._pre_root_counts = counts
+
+    def _is_search_draw(self, state: GameState) -> bool:
+        """Draw detection inside the search tree.
+
+        Legacy rule (``use_search_repetition`` off, the pre-1.4 behavior):
+        any position seen before anywhere — game history or search path —
+        scores as a draw on its first recurrence. That also zeroes winning
+        lines that merely pass through a once-seen position.
+
+        New rule (flag on):
+          * a repeat of any position on the current search path is a draw
+            (cycle detection), and
+          * a position already seen twice in the pre-root game history is a
+            draw (the third real visit is at hand).
+        A single pre-root occurrence no longer poisons the line.
+        """
+        if state.is_50_move_draw():
+            return True
+        if not self.cfg.use_search_repetition:
+            return state.is_repetition()
+        h = state.board.turn_hash(state.turn)
+        hist = state._hash_history
+        for i in range(len(hist) - 1, self._root_hist_len - 1, -1):
+            if hist[i] == h:
+                return True
+        return self._pre_root_counts.get(h, 0) >= 2
 
     # ------------------------------------------------------------------
     # Move ordering
@@ -330,7 +375,7 @@ class AIPlayer:
             return 0
 
         # Repetition / 50-move draw.
-        if ply > 0 and (state.is_repetition() or state.is_50_move_draw()):
+        if ply > 0 and self._is_search_draw(state):
             return 0
 
         # Mate distance pruning

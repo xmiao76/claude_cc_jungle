@@ -45,6 +45,10 @@ class SearchConfig:
     use_den_threat: bool = True          # den-threat / den-safety term
     use_noisy_den_quiescence: bool = True  # consider den-entry moves in quiescence
 
+    # --- v1.4 enhancements (not in v13_strong_config) ---
+    use_search_repetition: bool = True   # path-cycle / third-visit repetition rule
+                                         # (legacy: draw on ANY first recurrence)
+
     # --- Tuning margins (in the same centipawn-like scale as PIECE_VALUES) ---
     rfp_margin: int = 120                 # per ply of depth
     rfp_max_depth: int = 4
