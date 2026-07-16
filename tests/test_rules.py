@@ -102,6 +102,47 @@ def test_rat_water_captures_rat_water():
 
 
 # ---------------------------------------------------------------------------
+# Test: trap rule outranks the rank hierarchy (v1.5 fix)
+# ---------------------------------------------------------------------------
+
+def test_elephant_captures_trapped_rat():
+    """An enemy Rat standing in the attacker-side trap has rank 0 and must be
+    capturable by ANY adjacent piece — including the Elephant (the rank-
+    hierarchy exception does not protect a trapped piece)."""
+    b = Board()
+    ele = place(b, 2, 7, Color.BLUE, Animal.ELEPHANT)
+    rat = place(b, 2, 8, Color.BLACK, Animal.RAT)     # (2,8) is a Blue trap
+    assert can_capture(ele, rat, 2, 7, 2, 8, b), \
+        "Elephant must capture a Rat trapped in the Elephant-side trap"
+
+
+def test_movegen_produces_elephant_takes_trapped_rat():
+    b = Board()
+    place(b, 2, 7, Color.BLUE, Animal.ELEPHANT)
+    place(b, 2, 8, Color.BLACK, Animal.RAT)           # Blue trap
+    moves = generate_legal_moves(b, Color.BLUE)
+    assert any((m.fc, m.fr, m.tc, m.tr) == (2, 7, 2, 8) and m.captured != 0
+               for m in moves), "movegen must offer Elephant x trapped Rat"
+
+
+def test_untrapped_elephant_vs_rat_unchanged():
+    """The classic rule stays: Elephant cannot take an untrapped Rat."""
+    b = Board()
+    ele = place(b, 3, 4, Color.BLUE, Animal.ELEPHANT)
+    rat = place(b, 3, 3, Color.BLACK, Animal.RAT)     # plain land square
+    assert not can_capture(ele, rat, 3, 4, 3, 3, b)
+
+
+def test_water_guard_precedes_trap_rule():
+    """A Rat in the river stays immune to land attackers; the trap return
+    must sit after the water-boundary guard."""
+    b = Board()
+    lion = place(b, 0, 4, Color.BLUE, Animal.LION)
+    rat = place(b, 1, 4, Color.BLACK, Animal.RAT)     # river square
+    assert not can_capture(lion, rat, 0, 4, 1, 4, b)
+
+
+# ---------------------------------------------------------------------------
 # Test: Piece in opponent trap has effective rank 0
 # ---------------------------------------------------------------------------
 

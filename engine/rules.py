@@ -63,10 +63,16 @@ def can_capture(attacker_pid: int, defender_pid: int,
         # Both on same terrain: Rat can capture Rat freely
         if atk_rank == 1 and def_rank == 1:
             return True
+        # The trap rule outranks the rank hierarchy: a defender standing in
+        # the attacker-side's trap has effective rank 0 and may be captured
+        # by ANY piece — including the Elephant taking a trapped Rat.
+        if (def_col, def_row) in (TRAPS_BLACK if defender_pid > 0 else TRAPS_BLUE):
+            return True
         # Rat on land can capture Elephant on land
         if atk_rank == 1 and def_rank == 8:
             return not atk_in_water  # attacker must be on land
-        # Elephant can NOT capture Rat (Rat beats Elephant in rank hierarchy)
+        # Elephant can NOT capture an untrapped Rat (Rat beats Elephant in
+        # the rank hierarchy)
         if atk_rank == 8 and def_rank == 1:
             return False
 
