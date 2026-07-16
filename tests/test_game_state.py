@@ -38,10 +38,8 @@ def test_undo_restores_captured_piece():
     # Blue Wolf at (3,4), Black Cat at (3,3)
     wolf_pid = make_piece_id(Color.BLUE, Animal.WOLF)
     cat_pid = make_piece_id(Color.BLACK, Animal.CAT)
-    gs.board._grid[3][4] = wolf_pid
-    gs.board._grid[3][3] = cat_pid
-    gs.board._piece_positions[int(Color.BLUE)][wolf_pid] = (3, 4)
-    gs.board._piece_positions[int(Color.BLACK)][cat_pid] = (3, 3)
+    gs.board.place_piece(3, 4, wolf_pid)
+    gs.board.place_piece(3, 3, cat_pid)
     gs.turn = Color.BLUE
 
     move = Move(3, 4, 3, 3, cat_pid)

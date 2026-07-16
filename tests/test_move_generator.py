@@ -18,8 +18,7 @@ def empty_board() -> Board:
 
 def place(board: Board, col: int, row: int, color: Color, animal: Animal) -> int:
     pid = make_piece_id(color, animal)
-    board._grid[col][row] = pid
-    board._piece_positions[int(color)][pid] = (col, row)
+    board.place_piece(col, row, pid)
     return pid
 
 

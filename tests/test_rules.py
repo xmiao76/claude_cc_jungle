@@ -12,8 +12,7 @@ from engine.move_generator import generate_legal_moves
 
 def place(board: Board, col: int, row: int, color: Color, animal: Animal) -> int:
     pid = make_piece_id(color, animal)
-    board._grid[col][row] = pid
-    board._piece_positions[int(color)][pid] = (col, row)
+    board.place_piece(col, row, pid)
     return pid
 
 
@@ -195,20 +194,15 @@ def test_cannot_capture_own_piece():
 
 def test_rat_in_water_invulnerable_to_land_attacks():
     """A land piece adjacent to the river cannot capture a rat in the river."""
-    b = Board()
     rat_pid = make_piece_id(Color.BLACK, Animal.RAT)
-    b._grid[1][4] = rat_pid
-    b._piece_positions[int(Color.BLACK)][rat_pid] = (1, 4)
 
     # All Blue pieces on land adjacent to river — none should be able to capture the rat
     for animal in [Animal.CAT, Animal.DOG, Animal.WOLF, Animal.LEOPARD,
                    Animal.LION, Animal.ELEPHANT]:
         b2 = Board()
-        b2._grid[1][4] = rat_pid
-        b2._piece_positions[int(Color.BLACK)][rat_pid] = (1, 4)
+        b2.place_piece(1, 4, rat_pid)
         atk_pid = make_piece_id(Color.BLUE, animal)
-        b2._grid[0][4] = atk_pid
-        b2._piece_positions[int(Color.BLUE)][atk_pid] = (0, 4)
+        b2.place_piece(0, 4, atk_pid)
         moves = generate_legal_moves(b2, Color.BLUE)
         # No move should capture the rat at (1,4)
         captures = [m for m in moves if m.tc == 1 and m.tr == 4 and m.captured != 0]

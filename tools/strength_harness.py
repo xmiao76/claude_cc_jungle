@@ -148,8 +148,7 @@ def _fixed_midgame() -> GameState:
     gs.board = Board()
     for (c, r, color, animal) in specs:
         pid = make_piece_id(color, animal)
-        gs.board._grid[c][r] = pid
-        gs.board._piece_positions[int(color)][pid] = (c, r)
+        gs.board.place_piece(c, r, pid)
     gs.turn = Color.BLUE
     return gs
 

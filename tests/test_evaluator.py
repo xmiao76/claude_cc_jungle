@@ -15,8 +15,7 @@ def make_gs(*piece_specs) -> GameState:
     gs.board = Board()
     for (c, r, color, animal) in piece_specs:
         pid = make_piece_id(color, animal)
-        gs.board._grid[c][r] = pid
-        gs.board._piece_positions[int(color)][pid] = (c, r)
+        gs.board.place_piece(c, r, pid)
     return gs
 
 

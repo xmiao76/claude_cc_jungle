@@ -81,6 +81,16 @@ class Board:
             self.hash ^= _ZOBRIST[c][r][_pid_index(pid)]
             self._piece_positions[int(color)][pid] = (c, r)
 
+    def place_piece(self, col: int, row: int, pid: int) -> None:
+        """Put a piece on an empty square (position-setup helper).
+
+        Keeps the grid, the piece-position index, and the Zobrist hash
+        consistent. Used by tests and hand-built benchmark positions.
+        """
+        self._grid[col][row] = pid
+        self._piece_positions[int(piece_id_color(pid))][pid] = (col, row)
+        self.hash ^= _ZOBRIST[col][row][_pid_index(pid)]
+
     # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
