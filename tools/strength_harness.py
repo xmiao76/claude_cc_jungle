@@ -64,20 +64,28 @@ def _apply_random_opening(gs: GameState, rng: random.Random, plies: int) -> None
 
 def play_one(cfg_blue: SearchConfig, cfg_black: SearchConfig, *,
              budget_ms: int, max_moves: int,
-             opening_seed: int, opening_plies: int) -> Color | None:
-    """Play a single game. Returns the winning Color, or None for a draw/timeout."""
+             opening_seed: int, opening_plies: int,
+             budget_black_ms: int | None = None) -> Color | None:
+    """Play a single game. Returns the winning Color, or None for a draw/timeout.
+
+    *budget_black_ms* enables time-odds games (e.g. simulating an older,
+    slower engine build by shrinking its budget); default = same as Blue.
+    """
     gs = GameState()
     gs.new_game()
     _apply_random_opening(gs, random.Random(opening_seed), opening_plies)
 
     ai_blue = AIPlayer(Color.BLUE, _HARD_DIFFICULTY, cfg_blue)
     ai_black = AIPlayer(Color.BLACK, _HARD_DIFFICULTY, cfg_black)
+    black_ms = budget_ms if budget_black_ms is None else budget_black_ms
 
     for _ in range(max_moves):
         if gs.is_terminal():
             break
-        ai = ai_blue if gs.turn == Color.BLUE else ai_black
-        move = ai.get_best_move(gs, time_budget_ms=budget_ms)
+        if gs.turn == Color.BLUE:
+            move = ai_blue.get_best_move(gs, time_budget_ms=budget_ms)
+        else:
+            move = ai_black.get_best_move(gs, time_budget_ms=black_ms)
         if move is None:
             break
         gs.apply_move(move)
@@ -88,19 +96,23 @@ def play_one(cfg_blue: SearchConfig, cfg_black: SearchConfig, *,
 def play_match(cfg_a: SearchConfig, cfg_b: SearchConfig, *,
                games: int = 20, budget_ms: int = 300, max_moves: int = 200,
                opening_plies: int = 6, seed: int = 12345,
-               verbose: bool = False) -> dict:
+               verbose: bool = False, budget_b_ms: int | None = None) -> dict:
     """Play *games* games (rounded down to color-swapped pairs) of A vs B.
 
-    Returns a result dict: a_wins, b_wins, draws, games, a_score (0..1).
+    *budget_b_ms* gives side B a different per-move budget (time odds); it
+    follows B through the color swap. Returns a result dict: a_wins, b_wins,
+    draws, games, a_score (0..1).
     """
     n_pairs = max(1, games // 2)
     a_wins = b_wins = draws = 0
+    b_ms = budget_ms if budget_b_ms is None else budget_b_ms
 
     for p in range(n_pairs):
         opening_seed = seed + p
         # Game 1: A is Blue, B is Black.
         w1 = play_one(cfg_a, cfg_b, budget_ms=budget_ms, max_moves=max_moves,
-                      opening_seed=opening_seed, opening_plies=opening_plies)
+                      opening_seed=opening_seed, opening_plies=opening_plies,
+                      budget_black_ms=b_ms)
         if w1 == Color.BLUE:
             a_wins += 1
         elif w1 == Color.BLACK:
@@ -108,8 +120,9 @@ def play_match(cfg_a: SearchConfig, cfg_b: SearchConfig, *,
         else:
             draws += 1
         # Game 2: same opening, colors swapped (B is Blue, A is Black).
-        w2 = play_one(cfg_b, cfg_a, budget_ms=budget_ms, max_moves=max_moves,
-                      opening_seed=opening_seed, opening_plies=opening_plies)
+        w2 = play_one(cfg_b, cfg_a, budget_ms=b_ms, max_moves=max_moves,
+                      opening_seed=opening_seed, opening_plies=opening_plies,
+                      budget_black_ms=budget_ms)
         if w2 == Color.BLUE:
             b_wins += 1
         elif w2 == Color.BLACK:
@@ -190,7 +203,8 @@ def _cmd_selfplay(args: argparse.Namespace) -> None:
     t0 = time.perf_counter()
     res = play_match(cfg_a, cfg_b, games=args.games, budget_ms=args.budget,
                      max_moves=args.max_moves, opening_plies=args.opening_plies,
-                     seed=args.seed, verbose=args.verbose)
+                     seed=args.seed, verbose=args.verbose,
+                     budget_b_ms=args.budget_b)
     dt = time.perf_counter() - t0
     print("-" * 56)
     print(f"A ({args.a}) wins : {res['a_wins']}")
@@ -217,6 +231,8 @@ def main(argv: list[str] | None = None) -> None:
     sp.add_argument("--b", default="baseline", help="config for side B")
     sp.add_argument("--games", type=int, default=20)
     sp.add_argument("--budget", type=int, default=300, help="per-move ms")
+    sp.add_argument("--budget-b", type=int, default=None,
+                    help="per-move ms for side B (time odds; default = --budget)")
     sp.add_argument("--max-moves", type=int, default=200)
     sp.add_argument("--opening-plies", type=int, default=6)
     sp.add_argument("--seed", type=int, default=12345)
