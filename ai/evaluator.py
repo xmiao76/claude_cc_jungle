@@ -3,68 +3,33 @@
 from __future__ import annotations
 
 from config import (
-    COLS, ROWS,
     DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE,
-    TERRAIN, TERRAIN_RIVER,
-    PIECE_VALUES, EVAL_WEIGHTS, PST_TABLE,
+    ROWS,
+    PIECE_VALUES, EVAL_WEIGHTS, EVAL_WEIGHTS_TUNED,
+    NEIGHBORS, IS_RIVER, TRAP_ZEROES,
+    ADV_BLUE, ADV_BLACK, PST_BLUE, PST_BLACK,
+    DIST_TO_BLACK_DEN, DIST_TO_BLUE_DEN,
 )
-from engine.pieces import Animal, Color, piece_id_animal, piece_id_color
-from engine.move_generator import _JUMP_TABLE
-
-_OPPONENT_DEN = {
-    Color.BLUE: DEN_BLACK,
-    Color.BLACK: DEN_BLUE,
-}
-
-_OWN_DEN = {
-    Color.BLUE: DEN_BLUE,
-    Color.BLACK: DEN_BLACK,
-}
+from engine.pieces import Color
+from engine.move_generator import HAS_JUMP
+from engine.rules import can_capture_sq
 
 _INF = 10_000_000
 
-_DIRS = ((0, 1), (0, -1), (1, 0), (-1, 0))
 _MIDLINE = ROWS // 2  # row 4
 
-
-def _advancement(color: Color, row: int) -> int:
-    return (ROWS - 1 - row) if color == Color.BLUE else row
-
-
-def _pseudo_mobility(board, color: Color) -> int:
-    """Cheap mobility approximation: count adjacent empty/capturable squares.
-
-    Doesn't validate full capture legality (jumps, rat/elephant rules) — used
-    only as a proxy in evaluation, not for move generation.
-    """
-    count = 0
-    for pid, (c, r) in board.pieces_of(color).items():
-        for dc, dr in _DIRS:
-            nc, nr = c + dc, r + dr
-            if not (0 <= nc < COLS and 0 <= nr < ROWS):
-                continue
-            target = board.get(nc, nr)
-            if target == 0:
-                count += 1
-            elif (target > 0) != (color == Color.BLUE):
-                count += 1
-    return count
+# Den-approach squares per color: the traps orthogonally adjacent to that
+# color's den (all three own traps qualify on the standard board), as flat
+# square indices. An enemy piece standing there is one step from entering.
+def _den_approach_squares(den: tuple[int, int],
+                          traps: set[tuple[int, int]]) -> tuple[int, ...]:
+    den_c, den_r = den
+    return tuple(c * ROWS + r for (c, r) in traps
+                 if abs(c - den_c) + abs(r - den_r) == 1)
 
 
-def _has_jump_available(board, c: int, r: int) -> bool:
-    """True if Lion/Tiger at (c,r) has at least one unblocked jump endpoint."""
-    return bool(_JUMP_TABLE.get((c, r)))
-
-
-def _orth_friendly_adjacent(board, c: int, r: int, color: Color) -> bool:
-    """True if *color* has a piece orthogonally adjacent to (c, r)."""
-    for dc, dr in _DIRS:
-        nc, nr = c + dc, r + dr
-        if 0 <= nc < COLS and 0 <= nr < ROWS:
-            p = board.get(nc, nr)
-            if p != 0 and piece_id_color(p) == color:
-                return True
-    return False
+_DEN_APPROACH_BLUE = _den_approach_squares(DEN_BLUE, TRAPS_BLUE)
+_DEN_APPROACH_BLACK = _den_approach_squares(DEN_BLACK, TRAPS_BLACK)
 
 
 def _den_threat_level(board, color: Color) -> int:
@@ -76,16 +41,20 @@ def _den_threat_level(board, color: Color) -> int:
     any adjacent friendly piece can take it). This is additive to the pure
     den-proximity gradient: it expresses whether the approach is *defended*.
     """
-    den_c, den_r = _OWN_DEN[color]
-    own_traps = TRAPS_BLUE if color == Color.BLUE else TRAPS_BLACK
-    opponent = Color.BLACK if color == Color.BLUE else Color.BLUE
+    sqs = board._sq
+    my_is_blue = color == Color.BLUE
+    approach = _DEN_APPROACH_BLUE if my_is_blue else _DEN_APPROACH_BLACK
     danger = 0
-    for (tc, tr) in own_traps:
-        if abs(tc - den_c) + abs(tr - den_r) != 1:
-            continue  # only den-adjacent traps are entry approaches
-        occ = board.get(tc, tr)
-        if occ != 0 and piece_id_color(occ) == opponent:
-            danger += 1 if _orth_friendly_adjacent(board, tc, tr, color) else 3
+    for tsq in approach:
+        occ = sqs[tsq]
+        if occ != 0 and (occ > 0) != my_is_blue:
+            defended = False
+            for nsq in NEIGHBORS[tsq]:
+                p = sqs[nsq]
+                if p != 0 and (p > 0) == my_is_blue:
+                    defended = True
+                    break
+            danger += 1 if defended else 3
     return danger
 
 
@@ -95,9 +64,6 @@ def evaluate(state, color: Color, cfg=None) -> int:
     *cfg* is an optional :class:`ai.search_config.SearchConfig` gating the
     enhancement terms (PST, den-threat). When ``None`` all terms are enabled.
     """
-    board = state.board
-    opponent = Color.BLACK if color == Color.BLUE else Color.BLUE
-
     winner = state.get_winner()
     if winner is not None:
         return _INF if winner == color else -_INF
@@ -106,144 +72,300 @@ def evaluate(state, color: Color, cfg=None) -> int:
     if state.is_50_move_draw():
         return 0
 
-    score = 0
+    return _evaluate_core(state, color, cfg)
 
-    opp_den_c, opp_den_r = _OPPONENT_DEN[color]
-    own_den_c, own_den_r = _OWN_DEN[color]
 
-    adv_w = EVAL_WEIGHTS["advancement_per_row"]
-    den_max = EVAL_WEIGHTS["den_proximity_max_dist"]
-    den_step = EVAL_WEIGHTS["den_proximity_per_step"]
-    rat_water = EVAL_WEIGHTS["rat_in_water"]
-    rat_near_ele = EVAL_WEIGHTS["rat_adjacent_to_enemy_elephant"]
-    trap_bonus = EVAL_WEIGHTS["trap_control"]
-    den_def = EVAL_WEIGHTS["den_defender"]
-    jump_ready = EVAL_WEIGHTS["jump_ready"]
-    rat_blocks = EVAL_WEIGHTS["rat_blocks_river"]
-    adv_accel = EVAL_WEIGHTS["advancement_acceleration"]
-    tempo = EVAL_WEIGHTS["tempo"]
-    mob_w = EVAL_WEIGHTS["mobility"]
-    threat_w = EVAL_WEIGHTS["threat"]
-    pst_w = EVAL_WEIGHTS["pst"]
+def evaluate_nonterminal(state, color: Color, cfg=None) -> int:
+    """Static evaluation without the terminal-position detection.
+
+    ``evaluate`` calls ``state.get_winner()``, which runs a full legal-move
+    generation just to detect the (rare) no-moves stalemate — doubling the
+    cost of every quiescence leaf. Hot search paths that have already ruled
+    out an explicit result (``state.result is None``) use this variant
+    instead. A true stalemate leaf then evaluates by material rather than as
+    a loss; that inaccuracy is confined to the ``use_fast_movegen`` paths.
+    """
+    if state.is_50_move_draw():
+        return 0
+    return _evaluate_core(state, color, cfg)
+
+
+def _evaluate_core(state, color: Color, cfg) -> int:
+    """The static evaluation terms (no terminal checks).
+
+    ANTISYMMETRY INVARIANT: every per-piece term is computed from the piece's
+    OWN color (added for own pieces, subtracted for opponent pieces), never
+    from the evaluating side's perspective, so that
+    ``evaluate(BLUE) == -evaluate(BLACK)`` for any position.
+    """
+    board = state.board
+    my_is_blue = color == Color.BLUE
+    opponent = Color.BLACK if my_is_blue else Color.BLUE
+
+    # Local bindings for the hot per-piece loops.
+    sqs = board._sq
+    neighbors = NEIGHBORS
+    is_river = IS_RIVER
+    trap_zeroes = TRAP_ZEROES
+    has_jump = HAS_JUMP
+    piece_values = PIECE_VALUES
+
+    # Per-color geometry tables (own-color advancement keeps antisymmetry).
+    adv_my = ADV_BLUE if my_is_blue else ADV_BLACK
+    adv_opp = ADV_BLACK if my_is_blue else ADV_BLUE
+    pst_my = PST_BLUE if my_is_blue else PST_BLACK
+    pst_opp = PST_BLACK if my_is_blue else PST_BLUE
+    dist_their_den = DIST_TO_BLACK_DEN if my_is_blue else DIST_TO_BLUE_DEN
+    dist_own_den = DIST_TO_BLUE_DEN if my_is_blue else DIST_TO_BLACK_DEN
+    # TRAP_ZEROES value that zeroes MY pieces (= the opponent's traps), and
+    # the value that zeroes THEIR pieces (= our traps).
+    zeroes_mine = 1 if my_is_blue else 2
+    zeroes_theirs = 2 if my_is_blue else 1
+
+    # Weight table: the tuned set (Texel fit) when the config asks for it,
+    # else the hand-tuned legacy weights (v13/v14/baseline and cfg=None).
+    w = (EVAL_WEIGHTS_TUNED if cfg is not None and cfg.use_tuned_weights
+         else EVAL_WEIGHTS)
+    adv_w = w["advancement_per_row"]
+    den_max = w["den_proximity_max_dist"]
+    den_step = w["den_proximity_per_step"]
+    rat_water = w["rat_in_water"]
+    rat_near_ele = w["rat_adjacent_to_enemy_elephant"]
+    trap_bonus = w["trap_control"]
+    den_def = w["den_defender"]
+    jump_ready = w["jump_ready"]
+    rat_blocks = w["rat_blocks_river"]
+    adv_accel = w["advancement_acceleration"]
+    tempo = w["tempo"]
+    mob_w = w["mobility"]
+    pst_w = w["pst"]
+    hanging_w = w["hanging"]
 
     use_pst = True if cfg is None else cfg.use_pst
     use_den_threat = True if cfg is None else cfg.use_den_threat
+    use_hanging = True if cfg is None else cfg.use_hanging_penalty
 
-    enemy_elephant_pid = -int(Animal.ELEPHANT) if color == Color.BLUE else int(Animal.ELEPHANT)
+    enemy_elephant_pid = -8 if my_is_blue else 8
+    own_elephant_pid = 8 if my_is_blue else -8
 
     my_pieces = board.pieces_of(color)
     opp_pieces = board.pieces_of(opponent)
 
-    # 1. Material + positional — own pieces
-    for pid, (c, r) in my_pieces.items():
-        animal = piece_id_animal(pid)
-        score += PIECE_VALUES[int(animal)]
-        adv = _advancement(color, r)
+    score = 0
+    my_mobility = 0
+    opp_mobility = 0
+
+    # 1. Material + positional + mobility + trap control — own pieces
+    for pid, sq in my_pieces.items():
+        rank = pid if pid > 0 else -pid
+        score += piece_values[rank]
+        adv = adv_my[sq]
         score += adv * adv_w
         if adv > _MIDLINE:
             score += (adv - _MIDLINE) * adv_accel
         if use_pst:
-            score += PST_TABLE[adv][c] * pst_w
+            score += pst_my[sq] * pst_w
 
-        dist = abs(c - opp_den_c) + abs(r - opp_den_r)
+        dist = dist_their_den[sq]
         if dist <= den_max:
             score += (den_max + 1 - dist) * den_step
 
         # Den defender
-        own_dist = abs(c - own_den_c) + abs(r - own_den_r)
-        if own_dist <= 2:
+        if dist_own_den[sq] <= 2:
             score += den_def
 
-        if animal == Animal.RAT:
-            if TERRAIN[c][r] == TERRAIN_RIVER:
-                score += rat_water + rat_blocks
-            for dc, dr in _DIRS:
-                nc, nr = c + dc, r + dr
-                if 0 <= nc < COLS and 0 <= nr < ROWS:
-                    if board.get(nc, nr) == enemy_elephant_pid:
-                        score += rat_near_ele
+        is_rat = rank == 1
+        if is_rat and is_river[sq]:
+            score += rat_water + rat_blocks
 
-        if animal in (Animal.LION, Animal.TIGER):
-            if _has_jump_available(board, c, r):
-                score += jump_ready
+        # One neighbor scan: mobility (adjacent empty/enemy squares), the
+        # rat-hunts-elephant adjacency, and hanging-piece detection.
+        threatened = False
+        has_friend = False
+        for nsq in neighbors[sq]:
+            t = sqs[nsq]
+            if t == 0:
+                my_mobility += 1
+            elif (t > 0) != my_is_blue:
+                my_mobility += 1
+                if (use_hanging and not threatened
+                        and can_capture_sq(t, pid, nsq, sq, board)):
+                    threatened = True
+            else:
+                has_friend = True
+            if is_rat and t == enemy_elephant_pid:
+                score += rat_near_ele
+        # Undefended piece attacked by an adjacent enemy: rank-scaled penalty.
+        if use_hanging and threatened and not has_friend:
+            score -= hanging_w * rank
 
-    # 2. Material + positional — opponent pieces
-    own_elephant_pid = int(Animal.ELEPHANT) if color == Color.BLUE else -int(Animal.ELEPHANT)
-    for pid, (c, r) in opp_pieces.items():
-        animal = piece_id_animal(pid)
-        score -= PIECE_VALUES[int(animal)]
-        adv = _advancement(opponent, r)
+        if (rank == 7 or rank == 6) and has_jump[sq]:
+            score += jump_ready
+
+        if trap_zeroes[sq] == zeroes_mine:
+            score -= trap_bonus
+
+    # 2. Mirror — opponent pieces
+    for pid, sq in opp_pieces.items():
+        rank = pid if pid > 0 else -pid
+        score -= piece_values[rank]
+        adv = adv_opp[sq]
         score -= adv * adv_w
         if adv > _MIDLINE:
             score -= (adv - _MIDLINE) * adv_accel
         if use_pst:
-            score -= PST_TABLE[adv][c] * pst_w
+            score -= pst_opp[sq] * pst_w
 
-        dist = abs(c - own_den_c) + abs(r - own_den_r)
+        dist = dist_own_den[sq]
         if dist <= den_max:
             score -= (den_max + 1 - dist) * den_step
 
-        opp_own_dist = abs(c - opp_den_c) + abs(r - opp_den_r)
-        if opp_own_dist <= 2:
+        if dist_their_den[sq] <= 2:
             score -= den_def
 
-        if animal == Animal.RAT:
-            if TERRAIN[c][r] == TERRAIN_RIVER:
-                score -= rat_water + rat_blocks
-            for dc, dr in _DIRS:
-                nc, nr = c + dc, r + dr
-                if 0 <= nc < COLS and 0 <= nr < ROWS:
-                    if board.get(nc, nr) == own_elephant_pid:
-                        score -= rat_near_ele
+        is_rat = rank == 1
+        if is_rat and is_river[sq]:
+            score -= rat_water + rat_blocks
 
-        if animal in (Animal.LION, Animal.TIGER):
-            if _has_jump_available(board, c, r):
-                score -= jump_ready
+        threatened = False
+        has_friend = False
+        for nsq in neighbors[sq]:
+            t = sqs[nsq]
+            if t == 0:
+                opp_mobility += 1
+            elif (t > 0) == my_is_blue:
+                opp_mobility += 1
+                if (use_hanging and not threatened
+                        and can_capture_sq(t, pid, nsq, sq, board)):
+                    threatened = True
+            else:
+                has_friend = True
+            if is_rat and t == own_elephant_pid:
+                score -= rat_near_ele
+        if use_hanging and threatened and not has_friend:
+            score += hanging_w * rank
 
-    # 3. Trap control: opponent piece in our traps = effectively rank 0
-    our_traps = TRAPS_BLUE if color == Color.BLUE else TRAPS_BLACK
-    their_traps = TRAPS_BLACK if color == Color.BLUE else TRAPS_BLUE
-    for pid, (c, r) in opp_pieces.items():
-        if (c, r) in our_traps:
+        if (rank == 7 or rank == 6) and has_jump[sq]:
+            score -= jump_ready
+
+        if trap_zeroes[sq] == zeroes_theirs:
             score += trap_bonus
-    for pid, (c, r) in my_pieces.items():
-        if (c, r) in their_traps:
-            score -= trap_bonus
 
-    # 4. Mobility (cheap approximation)
-    score += (_pseudo_mobility(board, color) - _pseudo_mobility(board, opponent)) * mob_w
+    # 3. Mobility difference
+    score += (my_mobility - opp_mobility) * mob_w
 
-    # 5. Tempo (small bonus for side to move)
+    # 4. Tempo (small bonus for side to move)
     if state.turn == color:
         score += tempo
     else:
         score -= tempo
 
-    # 6. Den threat / safety: penalize undefended enemy pieces on our den
+    # 5. Den threat / safety: penalize undefended enemy pieces on our den
     #    approaches, reward the mirror. Additive to den-proximity (adds defense
     #    awareness). Computed per-own-color so it stays antisymmetric.
     if use_den_threat:
-        dt_w = EVAL_WEIGHTS["den_threat"]
+        dt_w = w["den_threat"]
         score -= dt_w * _den_threat_level(board, color)
         score += dt_w * _den_threat_level(board, opponent)
 
-    # Threat term intentionally folded into mobility/trap/material to keep
-    # eval cheap; threat_w retained for future tuning. Reserve a tiny use:
-    # bonus for our pieces adjacent to enemy higher-rank pieces (pressure).
-    if threat_w:
-        for pid, (c, r) in my_pieces.items():
-            for dc, dr in _DIRS:
-                nc, nr = c + dc, r + dr
-                if 0 <= nc < COLS and 0 <= nr < ROWS:
-                    target = board.get(nc, nr)
-                    if target != 0 and ((target > 0) != (color == Color.BLUE)):
-                        score += threat_w
-        for pid, (c, r) in opp_pieces.items():
-            for dc, dr in _DIRS:
-                nc, nr = c + dc, r + dr
-                if 0 <= nc < COLS and 0 <= nr < ROWS:
-                    target = board.get(nc, nr)
-                    if target != 0 and ((target > 0) == (color == Color.BLUE)):
-                        score -= threat_w
-
     return score
+
+
+def evaluate_features(state, color: Color, cfg=None) -> tuple[int, dict[str, int]]:
+    """Raw feature counts for the Texel tuner (NOT a hot path).
+
+    Returns ``(material, counts)`` such that, with the weight table ``w``
+    selected by *cfg*::
+
+        _evaluate_core(state, color, cfg) ==
+            material
+            + counts["rat_in_water"] * (w["rat_in_water"] + w["rat_blocks_river"])
+            + sum(counts[k] * w[k] for every other k in counts)
+
+    (The rat-in-water and rat-blocks-river weights always co-fire on the same
+    indicator, so they are one feature with a combined coefficient; material
+    is frozen and enters the fit as a fixed offset.) The consistency of this
+    identity is pinned by a property test.
+    """
+    board = state.board
+    my_is_blue = color == Color.BLUE
+    opponent = Color.BLACK if my_is_blue else Color.BLUE
+
+    sqs = board._sq
+    neighbors = NEIGHBORS
+    den_max = EVAL_WEIGHTS["den_proximity_max_dist"]   # structural, not fitted
+
+    use_pst = True if cfg is None else cfg.use_pst
+    use_den_threat = True if cfg is None else cfg.use_den_threat
+    use_hanging = True if cfg is None else cfg.use_hanging_penalty
+
+    counts = {
+        "advancement_per_row": 0,
+        "den_proximity_per_step": 0,
+        "den_defender": 0,
+        "rat_in_water": 0,
+        "rat_adjacent_to_enemy_elephant": 0,
+        "trap_control": 0,
+        "jump_ready": 0,
+        "advancement_acceleration": 0,
+        "tempo": 1 if state.turn == color else -1,
+        "mobility": 0,
+        "pst": 0,
+        "den_threat": 0,
+        "hanging": 0,
+    }
+    material = 0
+
+    for sign, side, side_is_blue in ((1, color, my_is_blue),
+                                     (-1, opponent, not my_is_blue)):
+        adv_t = ADV_BLUE if side_is_blue else ADV_BLACK
+        pst_t = PST_BLUE if side_is_blue else PST_BLACK
+        dist_enemy_den = DIST_TO_BLACK_DEN if side_is_blue else DIST_TO_BLUE_DEN
+        dist_own_den = DIST_TO_BLUE_DEN if side_is_blue else DIST_TO_BLACK_DEN
+        zeroed_here = 1 if side_is_blue else 2
+        enemy_ele = -8 if side_is_blue else 8
+
+        for pid, sq in board.pieces_of(side).items():
+            rank = pid if pid > 0 else -pid
+            material += sign * PIECE_VALUES[rank]
+            adv = adv_t[sq]
+            counts["advancement_per_row"] += sign * adv
+            if adv > _MIDLINE:
+                counts["advancement_acceleration"] += sign * (adv - _MIDLINE)
+            if use_pst:
+                counts["pst"] += sign * pst_t[sq]
+            dist = dist_enemy_den[sq]
+            if dist <= den_max:
+                counts["den_proximity_per_step"] += sign * (den_max + 1 - dist)
+            if dist_own_den[sq] <= 2:
+                counts["den_defender"] += sign
+            is_rat = rank == 1
+            if is_rat and IS_RIVER[sq]:
+                counts["rat_in_water"] += sign
+            threatened = False
+            has_friend = False
+            for nsq in neighbors[sq]:
+                t = sqs[nsq]
+                if t == 0:
+                    counts["mobility"] += sign
+                elif (t > 0) != side_is_blue:
+                    counts["mobility"] += sign
+                    if (use_hanging and not threatened
+                            and can_capture_sq(t, pid, nsq, sq, board)):
+                        threatened = True
+                else:
+                    has_friend = True
+                if is_rat and t == enemy_ele:
+                    counts["rat_adjacent_to_enemy_elephant"] += sign
+            if use_hanging and threatened and not has_friend:
+                counts["hanging"] -= sign * rank
+            if (rank == 7 or rank == 6) and HAS_JUMP[sq]:
+                counts["jump_ready"] += sign
+            if TRAP_ZEROES[sq] == zeroed_here:
+                counts["trap_control"] -= sign
+
+    if use_den_threat:
+        counts["den_threat"] = (_den_threat_level(board, opponent)
+                                - _den_threat_level(board, color))
+
+    return material, counts

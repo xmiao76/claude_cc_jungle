@@ -1,6 +1,5 @@
 """Integration tests: full AI-vs-AI game simulation."""
 
-import pytest
 from engine.game_state import GameState
 from engine.pieces import Color
 from ai.minimax import AIPlayer
@@ -33,7 +32,7 @@ def run_game(difficulty: int = 0, max_moves: int = 300) -> Color | None:
 
 def test_ai_vs_ai_completes_easy():
     """Easy AI-vs-AI game should complete within 300 moves."""
-    winner = run_game(difficulty=0, max_moves=300)
+    run_game(difficulty=0, max_moves=300)
     # Winner may be None if game didn't finish in 300 moves — that's OK for Easy
     # Key assertion: no crash
     assert True

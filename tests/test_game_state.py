@@ -1,6 +1,5 @@
 """Tests for GameState: undo/redo, turn tracking, copy."""
 
-import pytest
 from engine.board import Board, Move
 from engine.game_state import GameState
 from engine.pieces import Animal, Color, make_piece_id
@@ -39,10 +38,8 @@ def test_undo_restores_captured_piece():
     # Blue Wolf at (3,4), Black Cat at (3,3)
     wolf_pid = make_piece_id(Color.BLUE, Animal.WOLF)
     cat_pid = make_piece_id(Color.BLACK, Animal.CAT)
-    gs.board._grid[3][4] = wolf_pid
-    gs.board._grid[3][3] = cat_pid
-    gs.board._piece_positions[int(Color.BLUE)][wolf_pid] = (3, 4)
-    gs.board._piece_positions[int(Color.BLACK)][cat_pid] = (3, 3)
+    gs.board.place_piece(3, 4, wolf_pid)
+    gs.board.place_piece(3, 3, cat_pid)
     gs.turn = Color.BLUE
 
     move = Move(3, 4, 3, 3, cat_pid)
@@ -67,8 +64,7 @@ def test_starting_position_layout():
     top-to-bottom mirrors so each player's Elephant sits on their own left side
     (Black Elephant col 6, Blue Elephant col 0)."""
     from engine.pieces import (
-        Animal, Color, make_piece_id,
-        piece_id_color, piece_id_animal,
+        Animal, Color, piece_id_color, piece_id_animal,
     )
     expected = {
         # Black (top)

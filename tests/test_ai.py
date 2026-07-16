@@ -1,13 +1,11 @@
 """Tests for the AI engine."""
 
 import time
-import pytest
-from engine.board import Board, Move
+from engine.board import Board
 from engine.game_state import GameState
 from engine.pieces import Animal, Color, make_piece_id
-from engine.move_generator import generate_legal_moves
 from ai.minimax import AIPlayer
-from config import DEN_BLACK, DEN_BLUE
+from config import DEN_BLACK
 
 
 # ---------------------------------------------------------------------------
@@ -19,8 +17,7 @@ def make_gs(*piece_specs) -> GameState:
     gs.board = Board()
     for (c, r, color, animal) in piece_specs:
         pid = make_piece_id(color, animal)
-        gs.board._grid[c][r] = pid
-        gs.board._piece_positions[int(color)][pid] = (c, r)
+        gs.board.place_piece(c, r, pid)
     return gs
 
 

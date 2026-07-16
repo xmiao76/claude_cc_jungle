@@ -108,9 +108,6 @@ def make_trap_tile() -> pygame.Surface:
     cx, cy = TILE_SIZE // 2, TILE_SIZE // 2
     spike_color = (60, 35, 10)
     for angle in [0, 120, 240]:
-        rad = math.radians(angle - 90)
-        x1 = cx + int(28 * math.cos(rad))
-        y1 = cy + int(28 * math.sin(rad))
         # Draw a simple triangle spike
         pts = []
         for da in [-15, 0, 15]:
@@ -401,8 +398,6 @@ def draw_lion(s, body, dark, light) -> None:
     # Draw spike rays first (behind everything)
     for angle in range(0, 360, 30):
         rad = math.radians(angle)
-        cx2 = cx + int(1 * math.cos(rad))
-        cy2 = (cy - 8) + int(1 * math.sin(rad))
         tip_x = cx + int(30 * math.cos(rad))
         tip_y = (cy - 8) + int(30 * math.sin(rad))
         l_x = cx + int(18 * math.cos(math.radians(angle - 12)))
@@ -580,7 +575,6 @@ def generate_all():
 
     # Icon
     icon_surf = make_icon()
-    icon_path = os.path.join(OUTPUT_TILES, "icon.ico")
     pygame.image.save(icon_surf, os.path.join(OUTPUT_TILES, "icon.png"))
     print(f"  Saved {os.path.join(OUTPUT_TILES, 'icon.png')} (use as icon)")
 

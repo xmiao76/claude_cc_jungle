@@ -17,13 +17,11 @@ from config import (
     TERRAIN_LAND, TERRAIN_RIVER, TERRAIN_TRAP, TERRAIN_DEN,
     TERRAIN,
     COLOR_LAND, COLOR_RIVER, COLOR_TRAP, COLOR_DEN, COLOR_GRID,
-    COLOR_HIGHLIGHT_SELECT, COLOR_HIGHLIGHT_MOVE, COLOR_CAPTURE_FLASH,
-    COLOR_BLUE_PIECE, COLOR_BLACK_PIECE, COLOR_TEXT_LIGHT, COLOR_TEXT_DARK,
-    COLOR_PANEL_BG, COLOR_BG,
+    COLOR_HIGHLIGHT_SELECT, COLOR_BLUE_PIECE, COLOR_BLACK_PIECE, COLOR_TEXT_LIGHT, COLOR_PANEL_BG, COLOR_BG,
     PANEL_WIDTH, CAPTURE_FLASH_MS,
     asset_path,
 )
-from engine.pieces import Animal, Color, piece_id_color, piece_id_animal, ANIMAL_NAMES
+from engine.pieces import Animal, Color, piece_id_color, piece_id_animal
 from gui.fonts import safe_sysfont
 
 # Terrain background colors
@@ -259,7 +257,6 @@ class Renderer:
 
         # Legal move targets: semi-transparent green circle
         for (c, r) in legal_targets:
-            center = self._pixel_center(c, r)
             dot_surf = pygame.Surface((_config.CELL_SIZE, _config.CELL_SIZE), pygame.SRCALPHA)
             pygame.draw.circle(dot_surf, (100, 230, 100, 120), (_config.CELL_SIZE // 2, _config.CELL_SIZE // 2),
                                _config.CELL_SIZE // 4)
