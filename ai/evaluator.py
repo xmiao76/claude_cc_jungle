@@ -3,39 +3,32 @@
 from __future__ import annotations
 
 from config import (
-    COLS, ROWS,
     DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE,
-    TERRAIN, TERRAIN_RIVER,
-    PIECE_VALUES, EVAL_WEIGHTS, PST_TABLE,
+    ROWS,
+    PIECE_VALUES, EVAL_WEIGHTS,
+    NEIGHBORS, IS_RIVER, TRAP_ZEROES,
+    ADV_BLUE, ADV_BLACK, PST_BLUE, PST_BLACK,
+    DIST_TO_BLACK_DEN, DIST_TO_BLUE_DEN,
 )
-from engine.pieces import Color, piece_id_color
-from engine.move_generator import _JUMP_TABLE
-
-_OPPONENT_DEN = {
-    Color.BLUE: DEN_BLACK,
-    Color.BLACK: DEN_BLUE,
-}
-
-_OWN_DEN = {
-    Color.BLUE: DEN_BLUE,
-    Color.BLACK: DEN_BLACK,
-}
+from engine.pieces import Color
+from engine.move_generator import HAS_JUMP
 
 _INF = 10_000_000
 
-_DIRS = ((0, 1), (0, -1), (1, 0), (-1, 0))
 _MIDLINE = ROWS // 2  # row 4
 
+# Den-approach squares per color: the traps orthogonally adjacent to that
+# color's den (all three own traps qualify on the standard board), as flat
+# square indices. An enemy piece standing there is one step from entering.
+def _den_approach_squares(den: tuple[int, int],
+                          traps: set[tuple[int, int]]) -> tuple[int, ...]:
+    den_c, den_r = den
+    return tuple(c * ROWS + r for (c, r) in traps
+                 if abs(c - den_c) + abs(r - den_r) == 1)
 
-def _orth_friendly_adjacent(board, c: int, r: int, color: Color) -> bool:
-    """True if *color* has a piece orthogonally adjacent to (c, r)."""
-    for dc, dr in _DIRS:
-        nc, nr = c + dc, r + dr
-        if 0 <= nc < COLS and 0 <= nr < ROWS:
-            p = board.get(nc, nr)
-            if p != 0 and piece_id_color(p) == color:
-                return True
-    return False
+
+_DEN_APPROACH_BLUE = _den_approach_squares(DEN_BLUE, TRAPS_BLUE)
+_DEN_APPROACH_BLACK = _den_approach_squares(DEN_BLACK, TRAPS_BLACK)
 
 
 def _den_threat_level(board, color: Color) -> int:
@@ -47,16 +40,20 @@ def _den_threat_level(board, color: Color) -> int:
     any adjacent friendly piece can take it). This is additive to the pure
     den-proximity gradient: it expresses whether the approach is *defended*.
     """
-    den_c, den_r = _OWN_DEN[color]
-    own_traps = TRAPS_BLUE if color == Color.BLUE else TRAPS_BLACK
-    opponent = Color.BLACK if color == Color.BLUE else Color.BLUE
+    sqs = board._sq
+    my_is_blue = color == Color.BLUE
+    approach = _DEN_APPROACH_BLUE if my_is_blue else _DEN_APPROACH_BLACK
     danger = 0
-    for (tc, tr) in own_traps:
-        if abs(tc - den_c) + abs(tr - den_r) != 1:
-            continue  # only den-adjacent traps are entry approaches
-        occ = board.get(tc, tr)
-        if occ != 0 and piece_id_color(occ) == opponent:
-            danger += 1 if _orth_friendly_adjacent(board, tc, tr, color) else 3
+    for tsq in approach:
+        occ = sqs[tsq]
+        if occ != 0 and (occ > 0) != my_is_blue:
+            defended = False
+            for nsq in NEIGHBORS[tsq]:
+                p = sqs[nsq]
+                if p != 0 and (p > 0) == my_is_blue:
+                    defended = True
+                    break
+            danger += 1 if defended else 3
     return danger
 
 
@@ -101,20 +98,28 @@ def _evaluate_core(state, color: Color, cfg) -> int:
     ``evaluate(BLUE) == -evaluate(BLACK)`` for any position.
     """
     board = state.board
-    opponent = Color.BLACK if color == Color.BLUE else Color.BLUE
+    my_is_blue = color == Color.BLUE
+    opponent = Color.BLACK if my_is_blue else Color.BLUE
 
     # Local bindings for the hot per-piece loops.
-    get = board.get
-    terrain = TERRAIN
-    pst_table = PST_TABLE
+    sqs = board._sq
+    neighbors = NEIGHBORS
+    is_river = IS_RIVER
+    trap_zeroes = TRAP_ZEROES
+    has_jump = HAS_JUMP
     piece_values = PIECE_VALUES
-    dirs = _DIRS
-    cols = COLS
-    rows = ROWS
-    jump_table_get = _JUMP_TABLE.get
 
-    opp_den_c, opp_den_r = _OPPONENT_DEN[color]
-    own_den_c, own_den_r = _OWN_DEN[color]
+    # Per-color geometry tables (own-color advancement keeps antisymmetry).
+    adv_my = ADV_BLUE if my_is_blue else ADV_BLACK
+    adv_opp = ADV_BLACK if my_is_blue else ADV_BLUE
+    pst_my = PST_BLUE if my_is_blue else PST_BLACK
+    pst_opp = PST_BLACK if my_is_blue else PST_BLUE
+    dist_their_den = DIST_TO_BLACK_DEN if my_is_blue else DIST_TO_BLUE_DEN
+    dist_own_den = DIST_TO_BLUE_DEN if my_is_blue else DIST_TO_BLACK_DEN
+    # TRAP_ZEROES value that zeroes MY pieces (= the opponent's traps), and
+    # the value that zeroes THEIR pieces (= our traps).
+    zeroes_mine = 1 if my_is_blue else 2
+    zeroes_theirs = 2 if my_is_blue else 1
 
     adv_w = EVAL_WEIGHTS["advancement_per_row"]
     den_max = EVAL_WEIGHTS["den_proximity_max_dist"]
@@ -133,101 +138,87 @@ def _evaluate_core(state, color: Color, cfg) -> int:
     use_pst = True if cfg is None else cfg.use_pst
     use_den_threat = True if cfg is None else cfg.use_den_threat
 
-    my_is_blue = color == Color.BLUE
     enemy_elephant_pid = -8 if my_is_blue else 8
     own_elephant_pid = 8 if my_is_blue else -8
 
     my_pieces = board.pieces_of(color)
     opp_pieces = board.pieces_of(opponent)
 
-    our_traps = TRAPS_BLUE if my_is_blue else TRAPS_BLACK
-    their_traps = TRAPS_BLACK if my_is_blue else TRAPS_BLUE
-
     score = 0
     my_mobility = 0
     opp_mobility = 0
 
     # 1. Material + positional + mobility + trap control — own pieces
-    for pid, (c, r) in my_pieces.items():
+    for pid, sq in my_pieces.items():
         rank = pid if pid > 0 else -pid
         score += piece_values[rank]
-        adv = (rows - 1 - r) if my_is_blue else r
+        adv = adv_my[sq]
         score += adv * adv_w
         if adv > _MIDLINE:
             score += (adv - _MIDLINE) * adv_accel
         if use_pst:
-            score += pst_table[adv][c] * pst_w
+            score += pst_my[sq] * pst_w
 
-        dist = abs(c - opp_den_c) + abs(r - opp_den_r)
+        dist = dist_their_den[sq]
         if dist <= den_max:
             score += (den_max + 1 - dist) * den_step
 
         # Den defender
-        own_dist = abs(c - own_den_c) + abs(r - own_den_r)
-        if own_dist <= 2:
+        if dist_own_den[sq] <= 2:
             score += den_def
 
         is_rat = rank == 1
-        if is_rat and terrain[c][r] == TERRAIN_RIVER:
+        if is_rat and is_river[sq]:
             score += rat_water + rat_blocks
 
         # Mobility (cheap approximation: adjacent empty/enemy squares) and
         # the rat-hunts-elephant adjacency, in one neighbor scan.
-        for dc, dr in dirs:
-            nc = c + dc
-            nr = r + dr
-            if 0 <= nc < cols and 0 <= nr < rows:
-                t = get(nc, nr)
-                if t == 0 or (t > 0) != my_is_blue:
-                    my_mobility += 1
-                if is_rat and t == enemy_elephant_pid:
-                    score += rat_near_ele
+        for nsq in neighbors[sq]:
+            t = sqs[nsq]
+            if t == 0 or (t > 0) != my_is_blue:
+                my_mobility += 1
+            if is_rat and t == enemy_elephant_pid:
+                score += rat_near_ele
 
-        if rank == 7 or rank == 6:  # Lion / Tiger: jump-square readiness
-            if jump_table_get((c, r)):
-                score += jump_ready
+        if (rank == 7 or rank == 6) and has_jump[sq]:
+            score += jump_ready
 
-        if (c, r) in their_traps:
+        if trap_zeroes[sq] == zeroes_mine:
             score -= trap_bonus
 
     # 2. Mirror — opponent pieces
-    for pid, (c, r) in opp_pieces.items():
+    for pid, sq in opp_pieces.items():
         rank = pid if pid > 0 else -pid
         score -= piece_values[rank]
-        adv = r if my_is_blue else (rows - 1 - r)
+        adv = adv_opp[sq]
         score -= adv * adv_w
         if adv > _MIDLINE:
             score -= (adv - _MIDLINE) * adv_accel
         if use_pst:
-            score -= pst_table[adv][c] * pst_w
+            score -= pst_opp[sq] * pst_w
 
-        dist = abs(c - own_den_c) + abs(r - own_den_r)
+        dist = dist_own_den[sq]
         if dist <= den_max:
             score -= (den_max + 1 - dist) * den_step
 
-        opp_own_dist = abs(c - opp_den_c) + abs(r - opp_den_r)
-        if opp_own_dist <= 2:
+        if dist_their_den[sq] <= 2:
             score -= den_def
 
         is_rat = rank == 1
-        if is_rat and terrain[c][r] == TERRAIN_RIVER:
+        if is_rat and is_river[sq]:
             score -= rat_water + rat_blocks
 
-        for dc, dr in dirs:
-            nc = c + dc
-            nr = r + dr
-            if 0 <= nc < cols and 0 <= nr < rows:
-                t = get(nc, nr)
-                if t == 0 or (t > 0) == my_is_blue:
-                    opp_mobility += 1
-                if is_rat and t == own_elephant_pid:
-                    score -= rat_near_ele
+        for nsq in neighbors[sq]:
+            t = sqs[nsq]
+            if t == 0 or (t > 0) == my_is_blue:
+                opp_mobility += 1
+            if is_rat and t == own_elephant_pid:
+                score -= rat_near_ele
 
-        if rank == 7 or rank == 6:
-            if jump_table_get((c, r)):
-                score -= jump_ready
+        if (rank == 7 or rank == 6) and has_jump[sq]:
+            score -= jump_ready
 
-        if (c, r) in our_traps:
+        if trap_zeroes[sq] == zeroes_theirs:
             score += trap_bonus
 
     # 3. Mobility difference

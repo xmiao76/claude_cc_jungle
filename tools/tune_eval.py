@@ -43,8 +43,8 @@ def _serialize(gs: GameState) -> dict:
     """One storable row for the current position (result added at game end)."""
     pieces = []
     for color in (Color.BLUE, Color.BLACK):
-        for pid, (c, r) in gs.board.pieces_of(color).items():
-            pieces.append([pid, c, r])
+        for pid, sq in gs.board.pieces_of(color).items():
+            pieces.append([pid, sq // 9, sq % 9])
     return {
         "pieces": pieces,
         "turn": int(gs.turn),

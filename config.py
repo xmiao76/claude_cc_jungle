@@ -188,6 +188,77 @@ TIME_BANK_MAX_FRAC = 2.0       # bank cap, as a multiple of the nominal budget
 TIME_EXTEND_MAX_FRAC = 0.5     # max per-move extension drawn from the bank
 
 # ---------------------------------------------------------------------------
+# Flat-board tables (v1.5). Square index: sq = col * ROWS + row (0..62).
+# The engine hot paths (movegen, rules, eval, SEE) index these flat tables
+# instead of doing per-step coordinate math and bounds checks.
+# ---------------------------------------------------------------------------
+
+NUM_SQUARES = COLS * ROWS
+
+SQ_C = tuple(sq // ROWS for sq in range(NUM_SQUARES))
+SQ_R = tuple(sq % ROWS for sq in range(NUM_SQUARES))
+
+TERRAIN_FLAT = tuple(TERRAIN[sq // ROWS][sq % ROWS] for sq in range(NUM_SQUARES))
+IS_RIVER = tuple(t == TERRAIN_RIVER for t in TERRAIN_FLAT)
+
+DEN_BLACK_SQ = DEN_BLACK[0] * ROWS + DEN_BLACK[1]
+DEN_BLUE_SQ = DEN_BLUE[0] * ROWS + DEN_BLUE[1]
+
+
+def _build_neighbors() -> tuple[tuple[int, ...], ...]:
+    """In-bounds orthogonal neighbors per square.
+
+    Direction order (0,-1),(0,1),(-1,0),(1,0) matches the move generator's
+    historical _DIRS order — move-list order (and therefore search-tree
+    shape) depends on it. Do not reorder.
+    """
+    out = []
+    for sq in range(NUM_SQUARES):
+        c, r = sq // ROWS, sq % ROWS
+        nbs = []
+        for (dc, dr) in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            nc, nr = c + dc, r + dr
+            if 0 <= nc < COLS and 0 <= nr < ROWS:
+                nbs.append(nc * ROWS + nr)
+        out.append(tuple(nbs))
+    return tuple(out)
+
+
+NEIGHBORS = _build_neighbors()
+
+# Trap rank-zeroing per square: 0 = none, 1 = zeroes BLUE pieces (the traps
+# around Black's den), 2 = zeroes BLACK pieces (the traps around Blue's den).
+def _build_trap_zeroes() -> tuple[int, ...]:
+    tz = [0] * NUM_SQUARES
+    for (c, r) in TRAPS_BLACK:
+        tz[c * ROWS + r] = 1
+    for (c, r) in TRAPS_BLUE:
+        tz[c * ROWS + r] = 2
+    return tuple(tz)
+
+
+TRAP_ZEROES = _build_trap_zeroes()
+
+# Per-color evaluation geometry: own-color advancement, PST value, Manhattan
+# distance to each den. All pure geometry (weights are applied at runtime so
+# the tables stay valid under tuned weight sets).
+ADV_BLUE = tuple(ROWS - 1 - (sq % ROWS) for sq in range(NUM_SQUARES))
+ADV_BLACK = tuple(sq % ROWS for sq in range(NUM_SQUARES))
+
+PST_BLUE = tuple(PST_TABLE[ADV_BLUE[sq]][sq // ROWS] for sq in range(NUM_SQUARES))
+PST_BLACK = tuple(PST_TABLE[ADV_BLACK[sq]][sq // ROWS] for sq in range(NUM_SQUARES))
+
+
+def _dist_table(den: tuple[int, int]) -> tuple[int, ...]:
+    dc, dr = den
+    return tuple(abs(sq // ROWS - dc) + abs(sq % ROWS - dr)
+                 for sq in range(NUM_SQUARES))
+
+
+DIST_TO_BLACK_DEN = _dist_table(DEN_BLACK)
+DIST_TO_BLUE_DEN = _dist_table(DEN_BLUE)
+
+# ---------------------------------------------------------------------------
 # Versioning
 # ---------------------------------------------------------------------------
 

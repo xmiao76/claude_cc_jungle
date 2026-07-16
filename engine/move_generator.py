@@ -1,16 +1,25 @@
-"""Legal move generation for all pieces in Jungle."""
+"""Legal move generation for all pieces in Jungle.
+
+v1.5: hot paths run on the flat 63-square representation — precomputed
+in-bounds neighbor lists (no per-step bounds checks or coordinate math) and
+a flat jump table whose entries carry their precomputed river-path squares
+(no per-jump path walking).
+"""
 
 from __future__ import annotations
 
 from config import (
     COLS, ROWS, TERRAIN, TERRAIN_RIVER,
     DEN_BLACK, DEN_BLUE,
+    NEIGHBORS, TERRAIN_FLAT, SQ_C, SQ_R,
+    DEN_BLACK_SQ, DEN_BLUE_SQ,
 )
 from engine.board import Board, Move
 from engine.pieces import Animal, Color
-from engine.rules import can_capture, is_jump_blocked
+from engine.rules import can_capture_sq, is_jump_blocked  # noqa: F401 (API re-export)
 
-# Cardinal directions
+# Cardinal directions (kept for the jump-table build; step generation uses
+# the precomputed NEIGHBORS table, which encodes the same order)
 _DIRS = [(0, -1), (0, 1), (-1, 0), (1, 0)]
 
 # Integer ranks for the hot loops (Animal is an IntEnum; comparing plain ints
@@ -19,11 +28,19 @@ _RAT = int(Animal.RAT)
 _TIGER = int(Animal.TIGER)
 _LION = int(Animal.LION)
 
-# Precomputed jump endpoints for Lion and Tiger.
+# Precomputed jump endpoints for Lion and Tiger, keyed by (col, row).
 # For each starting square on the edge of a river block, store a list of
 # (dc, dr, landing_col, landing_row) where dc/dr is the jump direction.
-# Built lazily at first import.
 _JUMP_TABLE: dict[tuple[int, int], list[tuple[int, int, int, int]]] = {}
+
+# Flat variant used by the hot paths, keyed by square index. Each entry is
+# (is_vertical, landing_sq, path_squares): is_vertical (dc == 0) marks the
+# 3-river-square crossing Tiger cannot make; path_squares are the river
+# squares crossed (a rat on any of them blocks the jump).
+_JUMP_TABLE_FLAT: dict[int, tuple[tuple[bool, int, tuple[int, ...]], ...]] = {}
+
+# HAS_JUMP[sq]: some jump endpoint exists at sq (eval's jump-readiness proxy).
+HAS_JUMP: tuple[bool, ...] = ()
 
 
 def _build_jump_table() -> None:
@@ -31,7 +48,9 @@ def _build_jump_table() -> None:
 
     For each land square adjacent to a river, follow each cardinal direction
     through the river to the first non-river square; that pair forms a jump.
+    Direction order follows _DIRS — entry order affects move-list order.
     """
+    global HAS_JUMP
     for c in range(COLS):
         for r in range(ROWS):
             if TERRAIN[c][r] == TERRAIN_RIVER:
@@ -42,9 +61,11 @@ def _build_jump_table() -> None:
                     continue
                 if TERRAIN[nc][nr] != TERRAIN_RIVER:
                     continue
+                path = []
                 lc, lr = nc, nr
                 while (0 <= lc < COLS and 0 <= lr < ROWS and
                        TERRAIN[lc][lr] == TERRAIN_RIVER):
+                    path.append(lc * ROWS + lr)
                     lc += dc
                     lr += dr
                 if not (0 <= lc < COLS and 0 <= lr < ROWS):
@@ -52,6 +73,11 @@ def _build_jump_table() -> None:
                 if TERRAIN[lc][lr] == TERRAIN_RIVER:
                     continue
                 _JUMP_TABLE.setdefault((c, r), []).append((dc, dr, lc, lr))
+                sq = c * ROWS + r
+                entry = (dc == 0, lc * ROWS + lr, tuple(path))
+                _JUMP_TABLE_FLAT[sq] = _JUMP_TABLE_FLAT.get(sq, ()) + (entry,)
+    HAS_JUMP = tuple(sq in _JUMP_TABLE_FLAT
+                     for sq in range(COLS * ROWS))
 
 
 _build_jump_table()
@@ -99,59 +125,63 @@ def generate_noisy_only(board: Board, color: Color) -> list[Move]:
     """Captures + den entries, generated directly (v1.4 speed pack).
 
     Behaviorally identical to :func:`generate_noisy_moves`, but never builds
-    the (much larger) quiet-move list. Quiescence calls this at every node,
-    where quiet moves are generated only to be thrown away by the filter.
+    the (much larger) quiet-move list. Quiescence calls this at every node.
     """
     moves: list[Move] = []
     append = moves.append
-    get = board.get
-    terrain = TERRAIN
-    jump_table_get = _JUMP_TABLE.get
-    cols = COLS
-    rows = ROWS
+    sqs = board._sq
+    terrain = TERRAIN_FLAT
+    neighbors = NEIGHBORS
+    jump_get = _JUMP_TABLE_FLAT.get
+    sq_c = SQ_C
+    sq_r = SQ_R
     is_blue = color == Color.BLUE
-    own_den = DEN_BLUE if is_blue else DEN_BLACK
-    opp_den = DEN_BLACK if is_blue else DEN_BLUE
+    own_den = DEN_BLUE_SQ if is_blue else DEN_BLACK_SQ
+    opp_den = DEN_BLACK_SQ if is_blue else DEN_BLUE_SQ
 
-    for pid, (c, r) in board.pieces_of(color).items():
+    for pid, fsq in board.pieces_of(color).items():
         rank = pid if pid > 0 else -pid
+        fc = sq_c[fsq]
+        fr = sq_r[fsq]
 
         # --- Normal steps ---
-        for (dc, dr) in _DIRS:
-            nc = c + dc
-            nr = r + dr
-            if not (0 <= nc < cols and 0 <= nr < rows):
+        for nsq in neighbors[fsq]:
+            if nsq == own_den:
                 continue
-            if (nc, nr) == own_den:
+            if terrain[nsq] == TERRAIN_RIVER and rank != _RAT:
                 continue
-            if terrain[nc][nr] == TERRAIN_RIVER and rank != _RAT:
-                continue
-            target_pid = get(nc, nr)
+            target_pid = sqs[nsq]
             if target_pid == 0:
-                if (nc, nr) == opp_den:
-                    append(Move(c, r, nc, nr, 0))
+                if nsq == opp_den:
+                    append(Move(fc, fr, sq_c[nsq], sq_r[nsq], 0))
             elif (target_pid > 0) != is_blue:
-                if can_capture(pid, target_pid, c, r, nc, nr, board):
-                    append(Move(c, r, nc, nr, target_pid))
+                if can_capture_sq(pid, target_pid, fsq, nsq, board):
+                    append(Move(fc, fr, sq_c[nsq], sq_r[nsq], target_pid))
 
         # --- River jumps (Lion and Tiger only) ---
         if rank == _LION or rank == _TIGER:
-            for (dc, dr, lc, lr) in jump_table_get((c, r), ()):
-                if rank == _TIGER and dc == 0:
-                    # dc == 0 is the vertical (3-river-square) crossing —
-                    # Tiger may only make the horizontal (2-square, dc != 0) jump.
+            for (vertical, lsq, path) in jump_get(fsq, ()):
+                if vertical and rank == _TIGER:
+                    # The vertical (3-river-square) crossing — Tiger may only
+                    # make the horizontal (2-square) jump.
                     continue
-                if (lc, lr) == own_den:
+                if lsq == own_den:
                     continue
-                if is_jump_blocked(c, r, lc, lr, board):
+                blocked = False
+                for psq in path:
+                    p = sqs[psq]
+                    if p == 1 or p == -1:   # a rat in the river blocks
+                        blocked = True
+                        break
+                if blocked:
                     continue
-                land_pid = get(lc, lr)
+                land_pid = sqs[lsq]
                 if land_pid == 0:
-                    if (lc, lr) == opp_den:
-                        append(Move(c, r, lc, lr, 0))
+                    if lsq == opp_den:
+                        append(Move(fc, fr, sq_c[lsq], sq_r[lsq], 0))
                 elif (land_pid > 0) != is_blue:
-                    if can_capture(pid, land_pid, c, r, lc, lr, board):
-                        append(Move(c, r, lc, lr, land_pid))
+                    if can_capture_sq(pid, land_pid, fsq, lsq, board):
+                        append(Move(fc, fr, sq_c[lsq], sq_r[lsq], land_pid))
 
     return moves
 
@@ -160,62 +190,63 @@ def generate_legal_moves(board: Board, color: Color) -> list[Move]:
     """Generate all legal moves for *color* on *board*."""
     moves: list[Move] = []
     append = moves.append
-    get = board.get
-    terrain = TERRAIN
-    jump_table_get = _JUMP_TABLE.get
-    cols = COLS
-    rows = ROWS
+    sqs = board._sq
+    terrain = TERRAIN_FLAT
+    neighbors = NEIGHBORS
+    jump_get = _JUMP_TABLE_FLAT.get
+    sq_c = SQ_C
+    sq_r = SQ_R
     is_blue = color == Color.BLUE
-    own_den = DEN_BLUE if is_blue else DEN_BLACK
+    own_den = DEN_BLUE_SQ if is_blue else DEN_BLACK_SQ
 
-    for pid, (c, r) in board.pieces_of(color).items():
+    for pid, fsq in board.pieces_of(color).items():
         rank = pid if pid > 0 else -pid
+        fc = sq_c[fsq]
+        fr = sq_r[fsq]
 
         # --- Normal steps (all pieces) ---
-        for (dc, dr) in _DIRS:
-            nc = c + dc
-            nr = r + dr
-            if not (0 <= nc < cols and 0 <= nr < rows):
-                continue
-
+        for nsq in neighbors[fsq]:
             # Cannot enter own den
-            if (nc, nr) == own_den:
+            if nsq == own_den:
                 continue
-
             # Only Rat can enter river squares
-            if terrain[nc][nr] == TERRAIN_RIVER and rank != _RAT:
+            if terrain[nsq] == TERRAIN_RIVER and rank != _RAT:
                 continue
-
-            target_pid = get(nc, nr)
-
+            target_pid = sqs[nsq]
             if target_pid == 0:
                 # Empty square
-                append(Move(c, r, nc, nr, 0))
+                append(Move(fc, fr, sq_c[nsq], sq_r[nsq], 0))
             elif (target_pid > 0) != is_blue:
                 # Enemy piece — check capture legality
-                if can_capture(pid, target_pid, c, r, nc, nr, board):
-                    append(Move(c, r, nc, nr, target_pid))
+                if can_capture_sq(pid, target_pid, fsq, nsq, board):
+                    append(Move(fc, fr, sq_c[nsq], sq_r[nsq], target_pid))
             # else: own piece — skip
 
         # --- River jumps (Lion and Tiger only) ---
         if rank == _LION or rank == _TIGER:
-            for (dc, dr, lc, lr) in jump_table_get((c, r), ()):
-                if rank == _TIGER and dc == 0:
-                    # dc == 0 is the vertical (3-river-square) crossing —
-                    # Tiger may only make the horizontal (2-square, dc != 0) jump.
+            for (vertical, lsq, path) in jump_get(fsq, ()):
+                if vertical and rank == _TIGER:
+                    # The vertical (3-river-square) crossing — Tiger may only
+                    # make the horizontal (2-square) jump.
                     continue
                 # Cannot land on own den
-                if (lc, lr) == own_den:
+                if lsq == own_den:
                     continue
-                # Check for rat blocking the river
-                if is_jump_blocked(c, r, lc, lr, board):
+                # A rat on any river square along the path blocks the jump
+                blocked = False
+                for psq in path:
+                    p = sqs[psq]
+                    if p == 1 or p == -1:
+                        blocked = True
+                        break
+                if blocked:
                     continue
                 # Check landing square
-                land_pid = get(lc, lr)
+                land_pid = sqs[lsq]
                 if land_pid == 0:
-                    append(Move(c, r, lc, lr, 0))
+                    append(Move(fc, fr, sq_c[lsq], sq_r[lsq], 0))
                 elif (land_pid > 0) != is_blue:
-                    if can_capture(pid, land_pid, c, r, lc, lr, board):
-                        append(Move(c, r, lc, lr, land_pid))
+                    if can_capture_sq(pid, land_pid, fsq, lsq, board):
+                        append(Move(fc, fr, sq_c[lsq], sq_r[lsq], land_pid))
 
     return moves

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from config import (
-    TERRAIN, TERRAIN_RIVER,
+    ROWS, TERRAIN, TERRAIN_RIVER,
     DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE,
+    IS_RIVER, TRAP_ZEROES,
 )
 from engine.pieces import Animal, Color, piece_id_color, piece_id_animal, piece_id_rank
 
@@ -25,23 +26,22 @@ def effective_rank(pid: int, col: int, row: int) -> int:
     return piece_id_rank(pid)
 
 
-def can_capture(attacker_pid: int, defender_pid: int,
-                atk_col: int, atk_row: int,
-                def_col: int, def_row: int,
-                board) -> bool:
-    """Return True if attacker at (atk_col, atk_row) can capture defender at (def_col, def_row).
+def can_capture_sq(attacker_pid: int, defender_pid: int,
+                   atk_sq: int, def_sq: int, board) -> bool:
+    """Flat-square capture legality — the engine's hottest predicate.
 
     Rules:
     - Must be different colors.
     - Rat in water cannot capture Elephant on land (or vice versa across boundary).
     - Rat (on land) can capture Elephant (on land).
+    - A defender standing in the attacker-side's trap has effective rank 0
+      and may be captured by ANY piece (outranks the rank hierarchy).
     - Otherwise: attacker effective_rank >= defender effective_rank.
     - Special: Rat can capture Rat regardless of water boundary as long as both are
       on the same terrain type (water-water or land-land).
 
-    This is the hottest predicate in the engine (called per adjacent enemy in
-    move generation and repeatedly in SEE), so it works on plain int ranks
-    (Animal is an IntEnum: Rat == 1, Elephant == 8).
+    Works on plain int ranks (Animal is an IntEnum: Rat == 1, Elephant == 8)
+    and flat config tables (IS_RIVER, TRAP_ZEROES).
     """
     atk_blue = attacker_pid > 0
 
@@ -54,8 +54,8 @@ def can_capture(attacker_pid: int, defender_pid: int,
 
     # Rat-specific cross-boundary rules
     if atk_rank == 1 or def_rank == 1:
-        atk_in_water = TERRAIN[atk_col][atk_row] == TERRAIN_RIVER
-        def_in_water = TERRAIN[def_col][def_row] == TERRAIN_RIVER
+        atk_in_water = IS_RIVER[atk_sq]
+        def_in_water = IS_RIVER[def_sq]
         # A piece in water is invulnerable to attacks from land pieces
         # (and vice versa) — except rat vs rat on same terrain type
         if atk_in_water != def_in_water:
@@ -66,7 +66,7 @@ def can_capture(attacker_pid: int, defender_pid: int,
         # The trap rule outranks the rank hierarchy: a defender standing in
         # the attacker-side's trap has effective rank 0 and may be captured
         # by ANY piece — including the Elephant taking a trapped Rat.
-        if (def_col, def_row) in (TRAPS_BLACK if defender_pid > 0 else TRAPS_BLUE):
+        if TRAP_ZEROES[def_sq] == (1 if defender_pid > 0 else 2):
             return True
         # Rat on land can capture Elephant on land
         if atk_rank == 1 and def_rank == 8:
@@ -77,11 +77,19 @@ def can_capture(attacker_pid: int, defender_pid: int,
             return False
 
     # General rank comparison using effective ranks (opponent's trap = rank 0)
-    atk_eff = 0 if (atk_col, atk_row) in (TRAPS_BLACK if atk_blue else TRAPS_BLUE) \
-        else atk_rank
-    def_eff = 0 if (def_col, def_row) in (TRAPS_BLACK if defender_pid > 0 else TRAPS_BLUE) \
-        else def_rank
+    atk_eff = 0 if TRAP_ZEROES[atk_sq] == (1 if atk_blue else 2) else atk_rank
+    def_eff = 0 if TRAP_ZEROES[def_sq] == (1 if defender_pid > 0 else 2) else def_rank
     return atk_eff >= def_eff
+
+
+def can_capture(attacker_pid: int, defender_pid: int,
+                atk_col: int, atk_row: int,
+                def_col: int, def_row: int,
+                board) -> bool:
+    """(col, row) wrapper around :func:`can_capture_sq` (public rules API)."""
+    return can_capture_sq(attacker_pid, defender_pid,
+                          atk_col * ROWS + atk_row, def_col * ROWS + def_row,
+                          board)
 
 
 def is_jump_blocked(fc: int, fr: int, tc: int, tr: int, board) -> bool:
