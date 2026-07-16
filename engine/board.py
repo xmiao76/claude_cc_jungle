@@ -45,8 +45,11 @@ class Move(NamedTuple):
 _RNG = random.Random(0xDEADBEEF)
 
 # piece_id_index maps: pid in range -8..-1, 1..8 → index 0..15
+# (v1.5 fix: positives previously mapped to pid - 1, colliding with the
+# negative range — Blue rank k and Black rank 9-k shared Zobrist tokens, so
+# positions with such pieces on swapped squares hashed identically.)
 def _pid_index(pid: int) -> int:
-    return pid + 8 if pid < 0 else pid - 1  # -8→0, -1→7, 1→8, 8→15
+    return pid + 8 if pid < 0 else pid + 7  # -8→0, -1→7, 1→8, 8→15
 
 # Flat Zobrist table: _Z[sq * 16 + pid_index]. Generated in the historical
 # nested (col, row, piece) order so values match the pre-flat engine.
@@ -140,16 +143,16 @@ class Board:
 
         # Remove mover from source
         sqs[fsq] = 0
-        h = self.hash ^ _Z[fsq * 16 + (pid + 8 if pid < 0 else pid - 1)]
+        h = self.hash ^ _Z[fsq * 16 + (pid + 8 if pid < 0 else pid + 7)]
 
         # Remove captured piece from tracking
         if captured:
             self._piece_positions[1 if captured < 0 else 0].pop(captured, None)
-            h ^= _Z[tsq * 16 + (captured + 8 if captured < 0 else captured - 1)]
+            h ^= _Z[tsq * 16 + (captured + 8 if captured < 0 else captured + 7)]
 
         # Place mover at destination
         sqs[tsq] = pid
-        h ^= _Z[tsq * 16 + (pid + 8 if pid < 0 else pid - 1)]
+        h ^= _Z[tsq * 16 + (pid + 8 if pid < 0 else pid + 7)]
         self.hash = h
 
         # Update position tracking
@@ -165,17 +168,17 @@ class Board:
 
         # Remove mover from destination
         sqs[tsq] = 0
-        h = self.hash ^ _Z[tsq * 16 + (pid + 8 if pid < 0 else pid - 1)]
+        h = self.hash ^ _Z[tsq * 16 + (pid + 8 if pid < 0 else pid + 7)]
 
         # Restore captured piece
         if captured:
             sqs[tsq] = captured
-            h ^= _Z[tsq * 16 + (captured + 8 if captured < 0 else captured - 1)]
+            h ^= _Z[tsq * 16 + (captured + 8 if captured < 0 else captured + 7)]
             self._piece_positions[1 if captured < 0 else 0][captured] = tsq
 
         # Restore mover at source
         sqs[fsq] = pid
-        h ^= _Z[fsq * 16 + (pid + 8 if pid < 0 else pid - 1)]
+        h ^= _Z[fsq * 16 + (pid + 8 if pid < 0 else pid + 7)]
         self.hash = h
 
         # Update position tracking
