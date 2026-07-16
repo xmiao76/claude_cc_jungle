@@ -107,6 +107,33 @@ def v13_strong_config() -> SearchConfig:
     return replace(SearchConfig(), **bool_overrides)
 
 
+# The bool flag-set of the v1.4 shipped engine (v1.3 set plus the v1.4
+# additions), frozen under the corrected trap-capture rules so the v1.5
+# strengthening round is measured against exactly the engine it started from.
+_V14_BOOL_FLAGS = _V13_BOOL_FLAGS | frozenset({
+    "use_search_repetition",
+    "use_fast_movegen",
+    "use_tt_generation",
+    "use_tt_static_eval",
+    "use_qsearch_tt_move",
+    "use_stability_time",
+})
+
+
+def v14_strong_config() -> SearchConfig:
+    """Return the shipped v1.4 engine configuration, frozen for regression A/B.
+
+    Any bool flag added after 1.4 is automatically False here.
+    ``selfplay --a strong --b v14`` measures what the current engine gained
+    over the 1.4 release.
+    """
+    bool_overrides = {
+        f.name: (f.name in _V14_BOOL_FLAGS)
+        for f in fields(SearchConfig) if isinstance(f.default, bool)
+    }
+    return replace(SearchConfig(), **bool_overrides)
+
+
 def baseline_config() -> SearchConfig:
     """Return a configuration with every enhancement disabled.
 

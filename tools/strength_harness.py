@@ -28,7 +28,8 @@ import time
 
 from ai.minimax import AIPlayer
 from ai.search_config import (
-    SearchConfig, baseline_config, strong_config, v13_strong_config,
+    SearchConfig, baseline_config, strong_config,
+    v13_strong_config, v14_strong_config,
 )
 from engine.game_state import GameState
 from engine.pieces import Color
@@ -37,6 +38,7 @@ _CONFIGS = {
     "strong": strong_config,
     "baseline": baseline_config,
     "v13": v13_strong_config,   # the shipped 1.3 engine, frozen for A/B
+    "v14": v14_strong_config,   # the shipped 1.4 engine, frozen for A/B
 }
 
 _HARD_DIFFICULTY = 2   # iterative deepening (time-controlled) for a fair comparison

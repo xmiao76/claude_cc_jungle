@@ -13,8 +13,9 @@ from engine.game_state import GameState
 from engine.pieces import Animal, Color, make_piece_id
 from ai.minimax import AIPlayer
 from ai.search_config import (
-    SearchConfig, baseline_config, strong_config, v13_strong_config,
-    _V13_BOOL_FLAGS,
+    SearchConfig, baseline_config, strong_config,
+    v13_strong_config, v14_strong_config,
+    _V13_BOOL_FLAGS, _V14_BOOL_FLAGS,
 )
 from tools.strength_harness import play_match, play_one
 from config import DEN_BLACK
@@ -383,6 +384,24 @@ def test_baseline_signature_immutable():
         == (6, 6, 6, 5, 5343)
     assert _fixed_depth_signature(baseline_config(), _start_position(), 0) \
         == (6, 6, 6, 5, 1785)
+
+
+def test_v14_flags_match_the_14_release():
+    """v14 = every 1.4-era bool flag on, every newer bool flag off."""
+    v14 = v14_strong_config()
+    for f in fields(SearchConfig):
+        if isinstance(f.default, bool):
+            expected = f.name in _V14_BOOL_FLAGS
+            assert getattr(v14, f.name) is expected, f.name
+
+
+def test_v14_signature_reproduces_14_engine():
+    """v14 pinned at the v1.5 freeze instant (post trap-rule fix), where it
+    was captured equal to strong_config() — the v1.5 gate control."""
+    assert _fixed_depth_signature(v14_strong_config(), midgame(), 1) \
+        == (6, 6, 6, 5, 3793)
+    assert _fixed_depth_signature(v14_strong_config(), _start_position(), 0) \
+        == (1, 7, 2, 7, 1049)
 
 
 # ---------------------------------------------------------------------------
