@@ -1,6 +1,6 @@
 JUNGLE - THE BOARD GAME
 =======================
-Version 1.4 | Windows Desktop
+Version 1.5 | Windows Desktop
 
 
 AUTHORSHIP
@@ -14,6 +14,39 @@ programmatically; no third-party code was incorporated.
   1.2-1.3 engine work : 2026-06-19 (Claude Opus 4.8, max effort, via Claude Code)
   1.4 engine update   : 2026-07-15 (Claude Fable 5, model "claude-fable-5",
                         max effort, via Claude Code)
+  1.5 rules fix +
+  engine update       : 2026-07-15 (Claude Fable 5, model "claude-fable-5",
+                        max effort, via Claude Code)
+
+WHAT'S NEW IN 1.5
+-----------------
+  Rules fix:
+  - An enemy piece standing in one of your traps can now be captured by ANY
+    adjacent piece — as the rules always stated. Previously the Elephant
+    refused to capture a trapped Rat (the Rat-beats-Elephant exception
+    wrongly outranked the trap rule).
+
+  Engine (stronger than the shipped 1.4, measured honestly):
+  - Rebuilt board internals ("flat board"): the engine examines positions
+    about 1.6x faster than the 1.4 release (2.5x the original 1.3 engine).
+    Speed is strength in timed play: against the 1.4 engine running at its
+    original speed (a time-odds simulation, conservatively scaled), 1.5
+    scored 59.2% over 200 games. Feature-for-feature at EQUAL speed the new
+    search/eval ideas add only a few Elo (51.5% over 400 games) — this
+    release's gain is mostly the speed.
+  - Against the built-in 1.3 engine at equal time, 1.5 scores 59.0%
+    (1.4 scored 56.5% in the same test).
+  - Smarter search: a finer-grained table decides how deeply each move is
+    re-examined (informed by each move's track record), pruning tightens
+    automatically in worsening positions, and two-move reply patterns are
+    remembered for move ordering.
+  - The evaluation now spots hanging pieces — an undefended piece attacked
+    by an adjacent stronger enemy is scored as being in danger.
+  - A self-play tuning pipeline (position harvesting + logistic weight
+    fitting) ships in the codebase; its first run showed the hand-tuned
+    weights are already near a local optimum, so they ship unchanged.
+  - The 1.4 engine joins 1.3 as a frozen built-in sparring partner ("v14")
+    so future changes stay measurable against every past release.
 
 WHAT'S NEW IN 1.4
 -----------------
