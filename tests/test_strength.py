@@ -368,6 +368,27 @@ def test_stability_time_banks_unused_budget():
     assert ai._time_bank > 0.0
 
 
+def test_v15_search_flags_are_wired():
+    """Each v1.5 search flag must actually change the search tree: flag-on
+    and flag-off fixed-depth signatures differ (node counts diverge)."""
+    base = strong_config()
+    for flag in ("use_lmr_matrix", "use_improving", "use_cont_history"):
+        on = _fixed_depth_signature(replace(base, **{flag: True}),
+                                    midgame(), 1)
+        off = _fixed_depth_signature(replace(base, **{flag: False}),
+                                     midgame(), 1)
+        assert on != off, f"{flag} appears to have no effect on the search"
+
+
+def test_lmr_matrix_shape_sane():
+    """Reductions grow with depth and move index and never go negative in
+    the table itself (adjustments are clamped by the r > 0 guard)."""
+    from ai.minimax import _LMR_TABLE
+    assert _LMR_TABLE[3][4] <= _LMR_TABLE[10][4] <= _LMR_TABLE[31][4]
+    assert _LMR_TABLE[8][4] <= _LMR_TABLE[8][20] <= _LMR_TABLE[8][63]
+    assert all(r >= 0 for row in _LMR_TABLE for r in row)
+
+
 def test_tt_static_eval_cache_is_search_neutral():
     """Reusing cached static evals must not change any search decision —
     identical best move and node count, only wall-time improves."""

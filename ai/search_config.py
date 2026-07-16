@@ -58,6 +58,14 @@ class SearchConfig:
     use_stability_time: bool = True      # best-move-stability time management:
                                          # bank unused budget, extend on instability
 
+    # --- v1.5 enhancements (not in v13/v14 configs) ---
+    use_lmr_matrix: bool = True          # log-based LMR reduction matrix with
+                                         # history/PV adjustments
+    use_improving: bool = True           # static-eval trend modulates
+                                         # RFP/futility/LMP aggressiveness
+    use_cont_history: bool = True        # (prev-to, to) continuation history
+                                         # as a quiet-ordering tiebreak
+
     # --- Tuning margins (in the same centipawn-like scale as PIECE_VALUES) ---
     rfp_margin: int = 120                 # per ply of depth
     rfp_max_depth: int = 4

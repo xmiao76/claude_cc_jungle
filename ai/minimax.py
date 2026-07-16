@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 
 from engine.board import Move
@@ -45,6 +46,15 @@ from config import (
 _MATE = _INF - 1000
 _MAX_PLY = 64
 _MATE_BOUND = _MATE - _MAX_PLY  # any |score| >= bound is treated as mate-distance
+
+# Log-based LMR reduction matrix (use_lmr_matrix): smoother than the legacy
+# integer-step formula; indexed [depth][move_index], both clamped.
+_LMR_TABLE: list[list[int]] = [[0] * 64 for _ in range(32)]
+for _d in range(1, 32):
+    for _i in range(1, 64):
+        _LMR_TABLE[_d][_i] = int(0.5 + math.log(_d) * math.log(_i) / 2.0)
+
+_LMR_HISTORY_THRESHOLD = 512   # history score that earns one less reduction
 
 # Smart time management: don't *start* a new iteration if the previous one took
 # long enough that the next is predicted to overrun the budget. A started
@@ -102,6 +112,11 @@ class AIPlayer:
         self._history: dict[tuple[int, int, int, int], int] = {}
         # Counter-move heuristic: prev_move_tuple -> reply move.
         self._counter: dict[tuple[int, int, int, int], Move] = {}
+        # Continuation history (use_cont_history): keyed on the previous
+        # move's destination and this move's destination.
+        self._cont_hist: dict[tuple[int, int, int, int], int] = {}
+        # Static evals along the current search path (use_improving).
+        self._static_stack: list[int | None] = [None] * _MAX_PLY
         # Repetition tracking for the current search (use_search_repetition):
         # length of the game history at the search root, and occurrence counts
         # of every pre-root position hash.
@@ -265,6 +280,7 @@ class AIPlayer:
             slots[1] = None
         self._history.clear()
         self._counter.clear()
+        self._cont_hist.clear()
 
     def _age_history(self) -> None:
         for k in list(self._history.keys()):
@@ -273,6 +289,12 @@ class AIPlayer:
                 del self._history[k]
             else:
                 self._history[k] = v
+        for k in list(self._cont_hist.keys()):
+            v = self._cont_hist[k] >> 1
+            if v == 0:
+                del self._cont_hist[k]
+            else:
+                self._cont_hist[k] = v
 
     # ------------------------------------------------------------------
     # Repetition / draw scoring
@@ -334,6 +356,10 @@ class AIPlayer:
 
         use_mvv_lva = self.cfg.use_mvv_lva_fix
         use_see = self.cfg.use_see_ordering
+        cont_hist = self._cont_hist if (self.cfg.use_cont_history
+                                        and prev_move is not None) else None
+        if cont_hist is not None:
+            prev_tc, prev_tr = prev_move.tc, prev_move.tr
 
         def key(m: Move) -> int:
             if tt_best is not None and m == tt_best:
@@ -357,7 +383,10 @@ class AIPlayer:
                 return -49_000
             if counter is not None and m == counter:
                 return -48_000
-            return -self._history.get((m.fc, m.fr, m.tc, m.tr), 0)
+            score = self._history.get((m.fc, m.fr, m.tc, m.tr), 0)
+            if cont_hist is not None:
+                score += cont_hist.get((prev_tc, prev_tr, m.tc, m.tr), 0)
+            return -score
 
         return sorted(moves, key=key)
 
@@ -476,6 +505,7 @@ class AIPlayer:
         # Static eval, computed once for the shallow-depth pruning heuristics.
         # Only meaningful at non-PV nodes outside a mate window.
         static_eval: int | None = None
+        improving = True
         not_mate_window = abs(beta) < _MATE_BOUND and abs(alpha) < _MATE_BOUND
         if not is_pv and not_mate_window:
             # Moves are already generated and non-empty here, so the terminal
@@ -490,10 +520,22 @@ class AIPlayer:
             else:
                 static_eval = evaluate(state, state.turn, self.cfg)
 
+            # ---- Improving heuristic: static-eval trend vs two plies up ----
+            if ply < _MAX_PLY:
+                self._static_stack[ply] = static_eval
+            if self.cfg.use_improving and ply >= 2:
+                prior = self._static_stack[ply - 2]
+                if prior is not None:
+                    improving = static_eval > prior
+
             # ---- Reverse futility pruning (a.k.a. static null move) ----
-            if (self.cfg.use_rfp and depth <= self.cfg.rfp_max_depth
-                    and static_eval - self.cfg.rfp_margin * depth >= beta):
-                return static_eval
+            if self.cfg.use_rfp and depth <= self.cfg.rfp_max_depth:
+                threshold = self.cfg.rfp_margin * depth
+                if self.cfg.use_improving and improving:
+                    # An improving position fails high more readily.
+                    threshold -= self.cfg.rfp_margin // 2
+                if static_eval - threshold >= beta:
+                    return static_eval
 
             # ---- Razoring: far below alpha at shallow depth → verify with qsearch ----
             if (self.cfg.use_razoring and depth <= self.cfg.razor_max_depth
@@ -503,6 +545,8 @@ class AIPlayer:
                     return 0
                 if q < alpha:
                     return q
+        elif ply < _MAX_PLY:
+            self._static_stack[ply] = None
 
         # ---- Null move pruning ----
         if (allow_null and not is_pv and depth >= NMP_MIN_DEPTH
@@ -547,15 +591,22 @@ class AIPlayer:
 
             # ---- Forward pruning of late / hopeless quiet moves (non-PV only) ----
             if is_quiet and best_move is not None and not is_pv and not_mate_window:
-                # Late move pruning (move-count based).
-                if (self.cfg.use_lmp
-                        and idx >= self.cfg.lmp_base + depth * depth):
-                    continue
-                # Futility pruning near the frontier.
+                # Late move pruning (move-count based); a worsening position
+                # earns half the move budget.
+                if self.cfg.use_lmp:
+                    limit = self.cfg.lmp_base + depth * depth
+                    if self.cfg.use_improving and not improving:
+                        limit = limit // 2 + 1
+                    if idx >= limit:
+                        continue
+                # Futility pruning near the frontier (tighter when worsening).
                 if (self.cfg.use_futility and static_eval is not None
-                        and depth <= self.cfg.futility_max_depth
-                        and static_eval + self.cfg.futility_margin <= alpha):
-                    continue
+                        and depth <= self.cfg.futility_max_depth):
+                    margin = self.cfg.futility_margin
+                    if self.cfg.use_improving and not improving:
+                        margin -= 50
+                    if static_eval + margin <= alpha:
+                        continue
 
             state.apply_move(move)
 
@@ -566,7 +617,15 @@ class AIPlayer:
                     and not move.captured
                     and (ply >= _MAX_PLY or move != self._killers[ply][0])
                     and (ply >= _MAX_PLY or move != self._killers[ply][1])):
-                r = 1 + (depth // 6) + (idx // 6)
+                if self.cfg.use_lmr_matrix:
+                    r = _LMR_TABLE[depth if depth < 32 else 31][idx if idx < 64 else 63]
+                    if (self._history.get((move.fc, move.fr, move.tc, move.tr), 0)
+                            >= _LMR_HISTORY_THRESHOLD):
+                        r -= 1   # well-proven quiet move: reduce less
+                    if is_pv:
+                        r -= 1
+                else:
+                    r = 1 + (depth // 6) + (idx // 6)
                 r = min(r, depth - 2)
                 if r > 0:
                     score = -self._negamax(state, depth - 1 - r, -alpha - 1, -alpha,
@@ -609,6 +668,12 @@ class AIPlayer:
                     if prev_move is not None:
                         self._counter[(prev_move.fc, prev_move.fr,
                                        prev_move.tc, prev_move.tr)] = move
+                        if self.cfg.use_cont_history:
+                            ck = (prev_move.tc, prev_move.tr,
+                                  move.tc, move.tr)
+                            self._cont_hist[ck] = (
+                                self._cont_hist.get(ck, 0) + depth * depth
+                            )
                 break
 
         if best_move is not None:
