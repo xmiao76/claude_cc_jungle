@@ -107,6 +107,10 @@ class AIPlayer:
         # of every pre-root position hash.
         self._root_hist_len = 0
         self._pre_root_counts: dict[int, int] = {}
+        # Repetition scan floor: index into _hash_history below which path
+        # entries are ignored. Raised past a null move so cycles that cross a
+        # fictional pass are not scored as claimable repetitions.
+        self._null_floor = 0
         # Stability time management (use_stability_time): unused nominal budget
         # banked across this player's moves, spendable on unstable searches.
         self._time_bank = 0.0
@@ -278,6 +282,7 @@ class AIPlayer:
         """Record the search-root boundary and pre-root position counts."""
         hist = state._hash_history
         self._root_hist_len = len(hist)
+        self._null_floor = self._root_hist_len
         counts: dict[int, int] = {}
         for h in hist:
             counts[h] = counts.get(h, 0) + 1
@@ -304,9 +309,14 @@ class AIPlayer:
             return state.is_repetition()
         h = state.board.turn_hash(state.turn)
         hist = state._hash_history
-        for i in range(len(hist) - 1, self._root_hist_len - 1, -1):
+        floor = self._null_floor
+        for i in range(len(hist) - 1, floor - 1, -1):
             if hist[i] == h:
                 return True
+        if floor != self._root_hist_len:
+            # Inside a null-move subtree: any repetition of a pre-null
+            # position crosses the fictional pass, so it is not claimable.
+            return False
         return self._pre_root_counts.get(h, 0) >= 2
 
     # ------------------------------------------------------------------
@@ -507,9 +517,12 @@ class AIPlayer:
                     static_eval = evaluate(state, state.turn, self.cfg)
             if static_eval >= beta:
                 state.apply_null()
+                prev_floor = self._null_floor
+                self._null_floor = len(state._hash_history)
                 null_score = -self._negamax(state, depth - 1 - NMP_REDUCTION,
                                             -beta, -beta + 1, ply + 1,
                                             prev_move=None, allow_null=False)
+                self._null_floor = prev_floor
                 state.undo_null()
                 if self._stopped:
                     return 0

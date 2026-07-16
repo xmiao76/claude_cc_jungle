@@ -261,6 +261,24 @@ def test_search_repetition_in_path_cycle_draws():
     assert ai._is_search_draw(gs) is True
 
 
+def test_search_repetition_ignores_cycles_across_null_moves():
+    """A 'repetition' whose loop crosses a null move includes a fictional
+    pass, so it is not claimable and must not score as a draw. (Reaching the
+    pre-null position again requires an odd closed walk — only possible via
+    river jumps — so the floor semantics are pinned directly here.)"""
+    gs = _two_lions()
+    ai = AIPlayer(Color.BLUE, 2, strong_config())
+    ai._setup_repetition_tracking(gs)
+    # Simulate: the current position occurred on the search path once...
+    gs._hash_history.append(gs.board.turn_hash(gs.turn))
+    # ...but a null move happened after that occurrence.
+    ai._null_floor = len(gs._hash_history)
+    assert ai._is_search_draw(gs) is False
+    # Without the intervening null it is a genuine in-path cycle.
+    ai._null_floor = ai._root_hist_len
+    assert ai._is_search_draw(gs) is True
+
+
 def test_search_wins_through_once_seen_position():
     """A winning line through a position seen ONCE earlier in the game must
     still be found; the legacy rule scored that line 0 and avoided it."""

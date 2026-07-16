@@ -138,7 +138,9 @@ def generate_noisy_only(board: Board, color: Color) -> list[Move]:
         if rank == _LION or rank == _TIGER:
             for (dc, dr, lc, lr) in jump_table_get((c, r), ()):
                 if rank == _TIGER and dc == 0:
-                    continue   # Tiger: horizontal (2-square) jumps only
+                    # dc == 0 is the vertical (3-river-square) crossing —
+                    # Tiger may only make the horizontal (2-square, dc != 0) jump.
+                    continue
                 if (lc, lr) == own_den:
                     continue
                 if is_jump_blocked(c, r, lc, lr, board):
@@ -199,7 +201,9 @@ def generate_legal_moves(board: Board, color: Color) -> list[Move]:
         if rank == _LION or rank == _TIGER:
             for (dc, dr, lc, lr) in jump_table_get((c, r), ()):
                 if rank == _TIGER and dc == 0:
-                    continue   # Tiger cannot make the vertical (3-square) jump
+                    # dc == 0 is the vertical (3-river-square) crossing —
+                    # Tiger may only make the horizontal (2-square, dc != 0) jump.
+                    continue
                 # Cannot land on own den
                 if (lc, lr) == own_den:
                     continue

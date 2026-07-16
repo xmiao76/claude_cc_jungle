@@ -59,7 +59,9 @@ class TranspositionTable:
             static_eval: int | None = None) -> None:
         table = self._table
         existing = table.get(key)
-        # An overwrite without a static eval keeps the one already stored.
+        # An overwrite without a static eval keeps the one already stored —
+        # safe across generations because a static eval is a pure function of
+        # the position key (same key = same board + side to move = same value).
         if static_eval is None and existing is not None:
             static_eval = existing.static_eval
 
