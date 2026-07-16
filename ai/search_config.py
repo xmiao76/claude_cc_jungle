@@ -65,6 +65,10 @@ class SearchConfig:
                                          # RFP/futility/LMP aggressiveness
     use_cont_history: bool = True        # (prev-to, to) continuation history
                                          # as a quiet-ordering tiebreak
+    use_hanging_penalty: bool = True     # eval: undefended piece attacked by an
+                                         # adjacent enemy is penalized by value
+    use_tuned_weights: bool = True       # eval reads EVAL_WEIGHTS_TUNED (Texel
+                                         # fit) instead of the hand weights
 
     # --- Tuning margins (in the same centipawn-like scale as PIECE_VALUES) ---
     rfp_margin: int = 120                 # per ply of depth

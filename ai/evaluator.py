@@ -5,13 +5,14 @@ from __future__ import annotations
 from config import (
     DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE,
     ROWS,
-    PIECE_VALUES, EVAL_WEIGHTS,
+    PIECE_VALUES, EVAL_WEIGHTS, EVAL_WEIGHTS_TUNED,
     NEIGHBORS, IS_RIVER, TRAP_ZEROES,
     ADV_BLUE, ADV_BLACK, PST_BLUE, PST_BLACK,
     DIST_TO_BLACK_DEN, DIST_TO_BLUE_DEN,
 )
 from engine.pieces import Color
 from engine.move_generator import HAS_JUMP
+from engine.rules import can_capture_sq
 
 _INF = 10_000_000
 
@@ -121,22 +122,28 @@ def _evaluate_core(state, color: Color, cfg) -> int:
     zeroes_mine = 1 if my_is_blue else 2
     zeroes_theirs = 2 if my_is_blue else 1
 
-    adv_w = EVAL_WEIGHTS["advancement_per_row"]
-    den_max = EVAL_WEIGHTS["den_proximity_max_dist"]
-    den_step = EVAL_WEIGHTS["den_proximity_per_step"]
-    rat_water = EVAL_WEIGHTS["rat_in_water"]
-    rat_near_ele = EVAL_WEIGHTS["rat_adjacent_to_enemy_elephant"]
-    trap_bonus = EVAL_WEIGHTS["trap_control"]
-    den_def = EVAL_WEIGHTS["den_defender"]
-    jump_ready = EVAL_WEIGHTS["jump_ready"]
-    rat_blocks = EVAL_WEIGHTS["rat_blocks_river"]
-    adv_accel = EVAL_WEIGHTS["advancement_acceleration"]
-    tempo = EVAL_WEIGHTS["tempo"]
-    mob_w = EVAL_WEIGHTS["mobility"]
-    pst_w = EVAL_WEIGHTS["pst"]
+    # Weight table: the tuned set (Texel fit) when the config asks for it,
+    # else the hand-tuned legacy weights (v13/v14/baseline and cfg=None).
+    w = (EVAL_WEIGHTS_TUNED if cfg is not None and cfg.use_tuned_weights
+         else EVAL_WEIGHTS)
+    adv_w = w["advancement_per_row"]
+    den_max = w["den_proximity_max_dist"]
+    den_step = w["den_proximity_per_step"]
+    rat_water = w["rat_in_water"]
+    rat_near_ele = w["rat_adjacent_to_enemy_elephant"]
+    trap_bonus = w["trap_control"]
+    den_def = w["den_defender"]
+    jump_ready = w["jump_ready"]
+    rat_blocks = w["rat_blocks_river"]
+    adv_accel = w["advancement_acceleration"]
+    tempo = w["tempo"]
+    mob_w = w["mobility"]
+    pst_w = w["pst"]
+    hanging_w = w["hanging"]
 
     use_pst = True if cfg is None else cfg.use_pst
     use_den_threat = True if cfg is None else cfg.use_den_threat
+    use_hanging = True if cfg is None else cfg.use_hanging_penalty
 
     enemy_elephant_pid = -8 if my_is_blue else 8
     own_elephant_pid = 8 if my_is_blue else -8
@@ -171,14 +178,26 @@ def _evaluate_core(state, color: Color, cfg) -> int:
         if is_rat and is_river[sq]:
             score += rat_water + rat_blocks
 
-        # Mobility (cheap approximation: adjacent empty/enemy squares) and
-        # the rat-hunts-elephant adjacency, in one neighbor scan.
+        # One neighbor scan: mobility (adjacent empty/enemy squares), the
+        # rat-hunts-elephant adjacency, and hanging-piece detection.
+        threatened = False
+        has_friend = False
         for nsq in neighbors[sq]:
             t = sqs[nsq]
-            if t == 0 or (t > 0) != my_is_blue:
+            if t == 0:
                 my_mobility += 1
+            elif (t > 0) != my_is_blue:
+                my_mobility += 1
+                if (use_hanging and not threatened
+                        and can_capture_sq(t, pid, nsq, sq, board)):
+                    threatened = True
+            else:
+                has_friend = True
             if is_rat and t == enemy_elephant_pid:
                 score += rat_near_ele
+        # Undefended piece attacked by an adjacent enemy: rank-scaled penalty.
+        if use_hanging and threatened and not has_friend:
+            score -= hanging_w * rank
 
         if (rank == 7 or rank == 6) and has_jump[sq]:
             score += jump_ready
@@ -208,12 +227,23 @@ def _evaluate_core(state, color: Color, cfg) -> int:
         if is_rat and is_river[sq]:
             score -= rat_water + rat_blocks
 
+        threatened = False
+        has_friend = False
         for nsq in neighbors[sq]:
             t = sqs[nsq]
-            if t == 0 or (t > 0) == my_is_blue:
+            if t == 0:
                 opp_mobility += 1
+            elif (t > 0) == my_is_blue:
+                opp_mobility += 1
+                if (use_hanging and not threatened
+                        and can_capture_sq(t, pid, nsq, sq, board)):
+                    threatened = True
+            else:
+                has_friend = True
             if is_rat and t == own_elephant_pid:
                 score -= rat_near_ele
+        if use_hanging and threatened and not has_friend:
+            score += hanging_w * rank
 
         if (rank == 7 or rank == 6) and has_jump[sq]:
             score -= jump_ready
@@ -234,8 +264,108 @@ def _evaluate_core(state, color: Color, cfg) -> int:
     #    approaches, reward the mirror. Additive to den-proximity (adds defense
     #    awareness). Computed per-own-color so it stays antisymmetric.
     if use_den_threat:
-        dt_w = EVAL_WEIGHTS["den_threat"]
+        dt_w = w["den_threat"]
         score -= dt_w * _den_threat_level(board, color)
         score += dt_w * _den_threat_level(board, opponent)
 
     return score
+
+
+def evaluate_features(state, color: Color, cfg=None) -> tuple[int, dict[str, int]]:
+    """Raw feature counts for the Texel tuner (NOT a hot path).
+
+    Returns ``(material, counts)`` such that, with the weight table ``w``
+    selected by *cfg*::
+
+        _evaluate_core(state, color, cfg) ==
+            material
+            + counts["rat_in_water"] * (w["rat_in_water"] + w["rat_blocks_river"])
+            + sum(counts[k] * w[k] for every other k in counts)
+
+    (The rat-in-water and rat-blocks-river weights always co-fire on the same
+    indicator, so they are one feature with a combined coefficient; material
+    is frozen and enters the fit as a fixed offset.) The consistency of this
+    identity is pinned by a property test.
+    """
+    board = state.board
+    my_is_blue = color == Color.BLUE
+    opponent = Color.BLACK if my_is_blue else Color.BLUE
+
+    sqs = board._sq
+    neighbors = NEIGHBORS
+    den_max = EVAL_WEIGHTS["den_proximity_max_dist"]   # structural, not fitted
+
+    use_pst = True if cfg is None else cfg.use_pst
+    use_den_threat = True if cfg is None else cfg.use_den_threat
+    use_hanging = True if cfg is None else cfg.use_hanging_penalty
+
+    counts = {
+        "advancement_per_row": 0,
+        "den_proximity_per_step": 0,
+        "den_defender": 0,
+        "rat_in_water": 0,
+        "rat_adjacent_to_enemy_elephant": 0,
+        "trap_control": 0,
+        "jump_ready": 0,
+        "advancement_acceleration": 0,
+        "tempo": 1 if state.turn == color else -1,
+        "mobility": 0,
+        "pst": 0,
+        "den_threat": 0,
+        "hanging": 0,
+    }
+    material = 0
+
+    for sign, side, side_is_blue in ((1, color, my_is_blue),
+                                     (-1, opponent, not my_is_blue)):
+        adv_t = ADV_BLUE if side_is_blue else ADV_BLACK
+        pst_t = PST_BLUE if side_is_blue else PST_BLACK
+        dist_enemy_den = DIST_TO_BLACK_DEN if side_is_blue else DIST_TO_BLUE_DEN
+        dist_own_den = DIST_TO_BLUE_DEN if side_is_blue else DIST_TO_BLACK_DEN
+        zeroed_here = 1 if side_is_blue else 2
+        enemy_ele = -8 if side_is_blue else 8
+
+        for pid, sq in board.pieces_of(side).items():
+            rank = pid if pid > 0 else -pid
+            material += sign * PIECE_VALUES[rank]
+            adv = adv_t[sq]
+            counts["advancement_per_row"] += sign * adv
+            if adv > _MIDLINE:
+                counts["advancement_acceleration"] += sign * (adv - _MIDLINE)
+            if use_pst:
+                counts["pst"] += sign * pst_t[sq]
+            dist = dist_enemy_den[sq]
+            if dist <= den_max:
+                counts["den_proximity_per_step"] += sign * (den_max + 1 - dist)
+            if dist_own_den[sq] <= 2:
+                counts["den_defender"] += sign
+            is_rat = rank == 1
+            if is_rat and IS_RIVER[sq]:
+                counts["rat_in_water"] += sign
+            threatened = False
+            has_friend = False
+            for nsq in neighbors[sq]:
+                t = sqs[nsq]
+                if t == 0:
+                    counts["mobility"] += sign
+                elif (t > 0) != side_is_blue:
+                    counts["mobility"] += sign
+                    if (use_hanging and not threatened
+                            and can_capture_sq(t, pid, nsq, sq, board)):
+                        threatened = True
+                else:
+                    has_friend = True
+                if is_rat and t == enemy_ele:
+                    counts["rat_adjacent_to_enemy_elephant"] += sign
+            if use_hanging and threatened and not has_friend:
+                counts["hanging"] -= sign * rank
+            if (rank == 7 or rank == 6) and HAS_JUMP[sq]:
+                counts["jump_ready"] += sign
+            if TRAP_ZEROES[sq] == zeroed_here:
+                counts["trap_control"] -= sign
+
+    if use_den_threat:
+        counts["den_threat"] = (_den_threat_level(board, opponent)
+                                - _den_threat_level(board, color))
+
+    return material, counts

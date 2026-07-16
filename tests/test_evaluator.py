@@ -19,6 +19,63 @@ def make_gs(*piece_specs) -> GameState:
     return gs
 
 
+def test_hanging_penalty_flags_undefended_attacked_piece():
+    """An undefended piece attacked by an adjacent stronger enemy is
+    penalized; an adjacent defender lifts the penalty entirely."""
+    from dataclasses import replace
+    from ai.search_config import strong_config
+
+    gs = make_gs(
+        (3, 4, Color.BLUE, Animal.CAT),       # attacked by the Lion below
+        (3, 3, Color.BLACK, Animal.LION),
+        (0, 8, Color.BLUE, Animal.ELEPHANT),  # far-away fillers
+        (6, 0, Color.BLACK, Animal.RAT),
+    )
+    gs.turn = Color.BLUE
+    on = strong_config()
+    off = replace(strong_config(), use_hanging_penalty=False)
+    assert evaluate(gs, Color.BLUE, on) < evaluate(gs, Color.BLUE, off)
+
+    gs2 = make_gs(
+        (3, 4, Color.BLUE, Animal.CAT),
+        (3, 3, Color.BLACK, Animal.LION),
+        (2, 4, Color.BLUE, Animal.DOG),       # defender next to the Cat
+        (0, 8, Color.BLUE, Animal.ELEPHANT),
+        (6, 0, Color.BLACK, Animal.RAT),
+    )
+    gs2.turn = Color.BLUE
+    assert evaluate(gs2, Color.BLUE, on) == evaluate(gs2, Color.BLUE, off)
+
+
+def test_feature_dot_product_matches_eval():
+    """evaluate_features must satisfy the documented weight identity against
+    the real evaluator, for tuned, frozen, and default configs."""
+    import random as _random
+    from ai.evaluator import evaluate_features, evaluate_nonterminal
+    from ai.search_config import strong_config, v14_strong_config
+    from config import EVAL_WEIGHTS, EVAL_WEIGHTS_TUNED
+
+    rng = _random.Random(4242)
+    gs = GameState()
+    gs.new_game()
+    for _ in range(60):
+        if gs.is_terminal():
+            break
+        for cfg, w in ((strong_config(), EVAL_WEIGHTS_TUNED),
+                       (v14_strong_config(), EVAL_WEIGHTS),
+                       (None, EVAL_WEIGHTS)):
+            for color in (Color.BLUE, Color.BLACK):
+                material, counts = evaluate_features(gs, color, cfg)
+                total = material
+                total += counts["rat_in_water"] * (w["rat_in_water"]
+                                                   + w["rat_blocks_river"])
+                for k, v in counts.items():
+                    if k != "rat_in_water":
+                        total += v * w[k]
+                assert total == evaluate_nonterminal(gs, color, cfg)
+        gs.apply_move(rng.choice(gs.legal_moves()))
+
+
 def test_evaluate_nonterminal_matches_evaluate_on_live_positions():
     """The hot-path eval (skips terminal detection) must agree with evaluate()
     on every non-terminal position, for both enhanced and baseline configs."""

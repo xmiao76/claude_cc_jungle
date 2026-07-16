@@ -139,7 +139,17 @@ EVAL_WEIGHTS = {
     "pst": 1,                      # piece-square table multiplier
     "den_threat": 45,              # per enemy piece that can reach an undefended
                                    # square next to our den (and the mirror)
+    # Added in v1.5
+    "hanging": 8,                  # per undefended piece attacked by an adjacent
+                                   # enemy, x piece_value/100 (use_hanging_penalty)
 }
+
+# Tuned weight table (v1.5, use_tuned_weights): produced by
+# `python -m tools.tune_eval fit` over harvested self-play positions.
+# Starts as a copy of the hand weights; replaced by the fitted values only
+# after the tuned set passes its own self-play gate. The frozen v13/v14/
+# baseline configs always read EVAL_WEIGHTS above.
+EVAL_WEIGHTS_TUNED = dict(EVAL_WEIGHTS)
 
 QUIESCENCE_MAX_PLY = 4    # cap on quiescence search depth
 
