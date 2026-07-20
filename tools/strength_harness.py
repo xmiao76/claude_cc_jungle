@@ -42,6 +42,8 @@ def parse_config(spec: str) -> SearchConfig:
         return SearchConfig.baseline()
     if spec == "enhanced":
         return SearchConfig.enhanced()
+    if spec == "tuned":
+        return SearchConfig.tuned()
     if spec.startswith("no:"):
         off = {f.strip() for f in spec[3:].split(",") if f.strip()}
         _validate(off)
@@ -77,13 +79,13 @@ def random_opening(rng: random.Random, plies: int) -> list:
 
 
 def play_game(opening: list, a_is_blue: bool, cfg_a: SearchConfig, cfg_b: SearchConfig,
-              nodes: int, move_cap: int) -> float:
+              nodes_a: int, nodes_b: int, move_cap: int) -> float:
     """Play one game; return A's result: 1.0 win, 0.5 draw, 0.0 loss."""
     gs = GameState()
     for mv in opening:
         gs.make_move(mv)
-    searcher_a = Searcher(cfg_a, max_nodes=nodes)
-    searcher_b = Searcher(cfg_b, max_nodes=nodes)
+    searcher_a = Searcher(cfg_a, max_nodes=nodes_a)
+    searcher_b = Searcher(cfg_b, max_nodes=nodes_b)
     a_color = BLUE if a_is_blue else BLACK
 
     plies = 0
@@ -103,8 +105,13 @@ def play_game(opening: list, a_is_blue: bool, cfg_a: SearchConfig, cfg_b: Search
 
 def run_match(cfg_a: SearchConfig, cfg_b: SearchConfig, *, games: int, nodes: int,
               seed: int, opening_plies: int = 4, move_cap: int = 250,
-              progress=None) -> dict:
-    """Run a match and return aggregate counts (from A's perspective)."""
+              progress=None, nodes_b: int | None = None) -> dict:
+    """Run a match and return aggregate counts (from A's perspective).
+
+    ``nodes`` is A's per-move node budget; ``nodes_b`` (default = ``nodes``) is
+    B's. Asymmetric budgets simulate a time handicap (time-odds), e.g. to price
+    a speedup: give the faster engine proportionally more nodes."""
+    nb = nodes if nodes_b is None else nodes_b
     pairs = (games + 1) // 2
     a_wins = a_losses = draws = 0
     played = 0
@@ -113,7 +120,7 @@ def run_match(cfg_a: SearchConfig, cfg_b: SearchConfig, *, games: int, nodes: in
         for a_is_blue in (True, False):
             if played >= games:
                 break
-            r = play_game(opening, a_is_blue, cfg_a, cfg_b, nodes, move_cap)
+            r = play_game(opening, a_is_blue, cfg_a, cfg_b, nodes, nb, move_cap)
             if r == 1.0:
                 a_wins += 1
             elif r == 0.0:

@@ -19,16 +19,11 @@ changes). The Tiger is allowed only when ``four_row`` is False.
 from __future__ import annotations
 
 from config import (
-    COLS,
     DEN_BLACK_SQ,
     DEN_BLUE_SQ,
-    DIRS,
     IS_RIVER,
+    JUMP_TABLE,
     NEIGHBORS,
-    NUM_SQUARES,
-    ROWS,
-    TERRAIN,
-    TERRAIN_RIVER,
 )
 from engine.board import Board, Move
 from engine.pieces import Animal
@@ -38,52 +33,6 @@ _RAT = int(Animal.RAT)
 _TIGER = int(Animal.TIGER)
 _LION = int(Animal.LION)
 EMPTY = 0
-
-# JUMP_TABLE[sq] -> tuple of (four_row: bool, landing_sq: int, river_path: tuple[int,...])
-JUMP_TABLE: dict[int, tuple[tuple[bool, int, tuple[int, ...]], ...]] = {}
-# Jump-readiness proxies for the evaluator. HAS_JUMP: any jump exists (Lion, which
-# may make either crossing). HAS_JUMP_TIGER: a *3-col* (non-four_row) jump exists,
-# i.e. one the Tiger is actually allowed to make.
-HAS_JUMP: tuple[bool, ...] = ()
-HAS_JUMP_TIGER: tuple[bool, ...] = ()
-
-
-def _build_jump_table() -> None:
-    global HAS_JUMP, HAS_JUMP_TIGER
-    for c in range(COLS):
-        for r in range(ROWS):
-            if TERRAIN[c][r] == TERRAIN_RIVER:
-                continue
-            sq = c * ROWS + r
-            for (dc, dr) in DIRS:
-                nc, nr = c + dc, r + dr
-                if not (0 <= nc < COLS and 0 <= nr < ROWS):
-                    continue
-                if TERRAIN[nc][nr] != TERRAIN_RIVER:
-                    continue
-                # Walk through consecutive river squares to the first non-river square.
-                path = []
-                lc, lr = nc, nr
-                while 0 <= lc < COLS and 0 <= lr < ROWS and TERRAIN[lc][lr] == TERRAIN_RIVER:
-                    path.append(lc * ROWS + lr)
-                    lc += dc
-                    lr += dr
-                if not (0 <= lc < COLS and 0 <= lr < ROWS):
-                    continue
-                if TERRAIN[lc][lr] == TERRAIN_RIVER:
-                    continue
-                landing = lc * ROWS + lr
-                four_row = dc == 0  # column fixed, row changes -> the "4 rows" jump
-                entry = (four_row, landing, tuple(path))
-                JUMP_TABLE[sq] = JUMP_TABLE.get(sq, ()) + (entry,)
-    HAS_JUMP = tuple(sq in JUMP_TABLE for sq in range(NUM_SQUARES))
-    HAS_JUMP_TIGER = tuple(
-        any(not four_row for (four_row, _lsq, _p) in JUMP_TABLE.get(sq, ()))
-        for sq in range(NUM_SQUARES)
-    )
-
-
-_build_jump_table()
 
 
 def _own_den(color: int) -> int:

@@ -25,14 +25,17 @@ is optional. `build.bat` uses a venv if present, else the Python on PATH.
 ## Architecture
 
 - `config.py` — geometry, terrain, colors, AI params, flat lookup tables
-  (`sq = col*ROWS + row`), and the pure screen-sizing helpers
-  (`compute_cell_size`, `layout_for_cell`).
+  (`sq = col*ROWS + row`), the river-jump geometry (`JUMP_TABLE`, `HAS_JUMP*`),
+  the evaluation contribution table `CONTRIB[code][sq]`, and the pure
+  screen-sizing helpers (`compute_cell_size`, `layout_for_cell`).
 - `engine/` — pure game logic (no pygame):
   - `pieces.py` (Color/Animal + int piece codes), `board.py` (flat board,
     Zobrist, allocation-free `apply`/`revert`), `rules.py` (capture legality),
     `move_generator.py` (moves + river jumps), `game_state.py` (turn, make/undo,
     win/draw).
-- `ai/` — `evaluator.py` (antisymmetric eval), `transposition.py`, `see.py`
+- `ai/` — `evaluator.py` (antisymmetric eval; the default path is **O(1)** —
+  the board keeps its Blue-perspective score incrementally in `board.eval_score`
+  via `config.CONTRIB`, so leaves don't rescan), `transposition.py`, `see.py`
   (static exchange evaluation), `minimax.py` (negamax α-β + iterative deepening +
   quiescence + `SearchConfig` feature flags; `AIPlayer`). The shipped engine is
   `SearchConfig.tuned()`: PVS, null-move pruning, late-move reductions, history
@@ -40,9 +43,12 @@ is optional. `build.bat` uses a venv if present, else the Python on PATH.
   piece-square-table term exist behind flags but are **off** — self-play (200+
   games) showed each is a net negative for this engine.
 - `tools/` — `strength_harness.py` (reproducible node-limited self-play between
-  two `SearchConfig`s) and `ablation.py` (parallel feature ablation vs baseline).
+  two `SearchConfig`s, with optional per-side node budgets), `ablation.py`
+  (parallel feature ablation vs baseline), and `timeodds.py` (prices a speedup:
+  same config at the faster/slower node counts = the Elo the extra search buys).
   All strength claims are measured here, never assumed — in pure Python a change
-  that searches deeper can still play weaker.
+  that searches deeper can still play weaker, and a pure speedup (invisible to
+  node-limited A/B) still deepens real timed play.
 - `gui/` — `renderer.py` (all drawing + view-only flip), `input_handler.py`
   (pixel↔square, two-click), `audio.py`, `fonts.py`.
 - `controller.py` — state machine (menu/playing/over), event loop, background

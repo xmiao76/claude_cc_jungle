@@ -21,11 +21,12 @@ build.bat                     REM build release\jungle_game.exe (+ zip)
 
 - Correct, tested implementation of the standard ruleset (river jumps, traps,
   dens, the Rat/Elephant exception, draws).
-- Negamax α-β engine with iterative deepening and three difficulty levels; the
+- Negamax α-β engine with iterative deepening and three difficulty levels. The
   v2.1 search (PVS, null-move pruning, late-move reductions, history heuristic,
-  aspiration windows, den-threat extension) searches several plies deeper and is
-  ~+68 Elo stronger in self-play. Every strength change is measured by
-  node-limited self-play (`tools/strength_harness.py`), never assumed.
+  aspiration windows, den-threat extension) is ~+68 Elo stronger; v2.2 makes the
+  evaluation incremental for a ~1.6x speedup (a full ply deeper at 2 s, worth
+  ~+97 Elo in time-odds self-play). Every change is measured by self-play
+  (`tools/strength_harness.py`, `ablation.py`, `timeodds.py`), never assumed.
 - Attractive board: distinct terrain, animal sprites, selection highlights,
   legal-move indicators, capture feedback, turn display, and win/loss messaging.
 - Choose who moves first (human or AI); flip the board view (display only).

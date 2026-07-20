@@ -1,6 +1,6 @@
 # JUNGLE — Dou Shou Qi
 
-**Version 2.1 · Windows Desktop**
+**Version 2.2 · Windows Desktop**
 
 A polished desktop version of the classic Chinese board game **Jungle**
 (*Dou Shou Qi* / 斗兽棋, "Battle of the Animals") with a built-in AI opponent,
@@ -114,10 +114,12 @@ plus the current turn, piece counts, move number, mode, and difficulty.
   - **Easy** — 3-ply search, instant.
   - **Medium** — 5-ply search, fast.
   - **Hard** — time-managed search (~2 s per move); plays a strong game. The
-    v2.1 engine adds principal-variation search, null-move pruning, late-move
+    engine uses principal-variation search, null-move pruning, late-move
     reductions, a history heuristic, aspiration windows, and a den-threat
-    extension, letting it search several plies deeper in the same time
-    (measured ~+68 Elo in self-play at a deep search budget).
+    extension (v2.1, ~+68 Elo in self-play at a deep search budget). v2.2 makes
+    the evaluation incremental, so the engine runs ~1.6x faster and searches a
+    full ply deeper in the same time (that extra search is worth ~+97 Elo in
+    time-odds self-play).
 - **Board view: Normal / Flipped** — rotate the board 180° for display only.
 
 ---

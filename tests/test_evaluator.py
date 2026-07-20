@@ -17,6 +17,33 @@ def test_symmetric_start_evaluates_to_zero():
     gs = GameState()
     assert _blue_score(gs.board) == 0
     assert evaluate(gs) == 0
+    assert gs.board.eval_score == 0
+
+
+def test_incremental_eval_matches_full_recompute():
+    """board.eval_score (maintained on make/undo) must equal a full recompute
+    at every step of random games, including after undo."""
+    import random
+
+    from engine.move_generator import generate_moves
+    for seed in range(8):
+        gs = GameState()
+        rng = random.Random(seed)
+        assert gs.board.eval_score == _blue_score(gs.board)
+        played = 0
+        for _ in range(80):
+            if gs.game_over:
+                break
+            legal = generate_moves(gs.board, gs.to_move)
+            if not legal:
+                break
+            gs.make_move(legal[rng.randrange(len(legal))])
+            assert gs.board.eval_score == _blue_score(gs.board)
+            played += 1
+        for _ in range(played):
+            gs.undo_move()
+            assert gs.board.eval_score == _blue_score(gs.board)
+        assert gs.board.eval_score == 0        # back to the symmetric start
 
 
 def test_evaluate_is_antisymmetric_in_side_to_move():
@@ -32,7 +59,7 @@ def test_evaluate_is_antisymmetric_in_side_to_move():
 
 
 def test_tiger_jump_readiness_excludes_four_row_only_squares():
-    from engine.move_generator import HAS_JUMP, HAS_JUMP_TIGER
+    from config import HAS_JUMP, HAS_JUMP_TIGER
     s12 = S(1, 2)   # only a 4-row (Lion-only) jump originates here
     s04 = S(0, 4)   # a 3-col jump (Lion + Tiger) originates here
     assert HAS_JUMP[s12] and not HAS_JUMP_TIGER[s12]

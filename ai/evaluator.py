@@ -1,11 +1,15 @@
 """Static position evaluation.
 
-``evaluate(state)`` returns a score in Blue-material units from the perspective
-of the side to move (positive = good for the mover), as negamax expects.
+``evaluate(state)`` returns a score from the side-to-move's perspective (as
+negamax expects). The default (non-PST) path is O(1): the board keeps its
+Blue-perspective static score incrementally (``board.eval_score``, the sum of
+``config.CONTRIB`` over occupied squares), so leaves cost a single read instead
+of a full-board rescan. The ``use_pst`` path adds a piece-square-table term and
+is a full recompute — kept only for ablation (self-play showed PST is a net
+negative, so the shipped engine leaves it off).
 
-The underlying ``_blue_score`` is *antisymmetric*: mirroring the position
-(swap colors and flip rows) negates it, and the symmetric starting position
-evaluates to exactly 0. This keeps the AI unbiased between the two sides.
+The score is *antisymmetric*: mirroring the position negates it, and the
+symmetric start evaluates to 0, keeping the AI unbiased between sides.
 """
 
 from __future__ import annotations
@@ -13,16 +17,19 @@ from __future__ import annotations
 from config import (
     ADV_BLACK,
     ADV_BLUE,
+    CONTRIB,
     DIST_TO_BLACK_DEN,
     DIST_TO_BLUE_DEN,
     EVAL_WEIGHTS,
+    HAS_JUMP,
+    HAS_JUMP_TIGER,
     IS_RIVER,
+    NUM_SQUARES,
     PIECE_VALUES,
     PST_BLACK,
     PST_BLUE,
     PST_WEIGHT,
 )
-from engine.move_generator import HAS_JUMP, HAS_JUMP_TIGER
 from engine.pieces import Animal, Color
 
 _RAT = int(Animal.RAT)
@@ -38,8 +45,8 @@ _RIVER_W = EVAL_WEIGHTS["rat_blocks_river"]
 _PST_W = PST_WEIGHT
 
 
-def _blue_score(board, use_pst: bool = True) -> int:
-    """Static evaluation from Blue's perspective (positive favors Blue)."""
+def _blue_score_pst(board) -> int:
+    """Full Blue-perspective recompute including the PST term (ablation path)."""
     score = 0
     sq = board.sq
     for s, code in enumerate(sq):
@@ -47,9 +54,6 @@ def _blue_score(board, use_pst: bool = True) -> int:
             continue
         animal = code & 0x0F
         val = PIECE_VALUES[animal]
-        # Jump-readiness: the Lion may make either crossing; the Tiger only the
-        # 3-col one, so it must use the Tiger-specific proxy (else it is credited
-        # for a 4-row jump it can never make).
         if animal == _LION:
             jumpish = HAS_JUMP[s]
         elif animal == _TIGER:
@@ -58,8 +62,7 @@ def _blue_score(board, use_pst: bool = True) -> int:
             jumpish = False
         ratish = animal == _RAT and IS_RIVER[s]
         if code >> 4 == _BLUE:
-            score += val
-            score += ADV_BLUE[s] * _ADV_W
+            score += val + ADV_BLUE[s] * _ADV_W
             d = DIST_TO_BLACK_DEN[s]
             if d <= _DEN_MAX:
                 score += (_DEN_MAX - d) * _DEN_W
@@ -67,11 +70,9 @@ def _blue_score(board, use_pst: bool = True) -> int:
                 score += _JUMP_W
             if ratish:
                 score += _RIVER_W
-            if use_pst:
-                score += PST_BLUE[s] * _PST_W
+            score += PST_BLUE[s] * _PST_W
         else:
-            score -= val
-            score -= ADV_BLACK[s] * _ADV_W
+            score -= val + ADV_BLACK[s] * _ADV_W
             d = DIST_TO_BLUE_DEN[s]
             if d <= _DEN_MAX:
                 score -= (_DEN_MAX - d) * _DEN_W
@@ -79,12 +80,26 @@ def _blue_score(board, use_pst: bool = True) -> int:
                 score -= _JUMP_W
             if ratish:
                 score -= _RIVER_W
-            if use_pst:
-                score -= PST_BLACK[s] * _PST_W
+            score -= PST_BLACK[s] * _PST_W
     return score
 
 
-def evaluate(state, use_pst: bool = True) -> int:
+def _blue_score(board, use_pst: bool = False) -> int:
+    """Blue-perspective static score. Non-PST path is a fast CONTRIB sum that
+    equals ``board.eval_score`` (also used to validate the incremental score)."""
+    if use_pst:
+        return _blue_score_pst(board)
+    sq = board.sq
+    c = CONTRIB
+    total = 0
+    for s in range(NUM_SQUARES):
+        code = sq[s]
+        if code:
+            total += c[code][s]
+    return total
+
+
+def evaluate(state, use_pst: bool = False) -> int:
     """Score from the side-to-move's perspective (negamax convention)."""
-    blue = _blue_score(state.board, use_pst)
+    blue = _blue_score_pst(state.board) if use_pst else state.board.eval_score
     return blue if state.to_move == _BLUE else -blue

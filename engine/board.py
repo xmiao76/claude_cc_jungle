@@ -10,7 +10,7 @@ from __future__ import annotations
 import random
 from typing import NamedTuple
 
-from config import NUM_SQUARES
+from config import CONTRIB, NUM_SQUARES
 from engine.pieces import EMPTY, code_color, make_code
 
 # ---------------------------------------------------------------------------
@@ -41,23 +41,28 @@ class Move(NamedTuple):
 
 
 class Board:
-    __slots__ = ("sq", "zobrist")
+    # ``eval_score`` is the Blue-perspective static score (sum of CONTRIB over
+    # occupied squares), maintained incrementally so the evaluator is O(1).
+    __slots__ = ("sq", "zobrist", "eval_score")
 
     def __init__(self) -> None:
         self.sq = [EMPTY] * NUM_SQUARES
         self.zobrist = 0
+        self.eval_score = 0
 
     # -- construction -------------------------------------------------------
 
     def clear(self) -> None:
         self.sq = [EMPTY] * NUM_SQUARES
         self.zobrist = 0
+        self.eval_score = 0
 
     def place(self, square: int, code: int) -> None:
-        """Place ``code`` on an empty square, updating the hash."""
+        """Place ``code`` on an empty square, updating the hash + eval score."""
         assert self.sq[square] == EMPTY, "place() onto an occupied square"
         self.sq[square] = code
         self.zobrist ^= ZOBRIST_PIECE[code][square]
+        self.eval_score += CONTRIB[code][square]
 
     def set_piece(self, square: int, color: int, animal: int) -> None:
         self.place(square, make_code(color, animal))
@@ -67,34 +72,41 @@ class Board:
         code = self.sq[square]
         if code != EMPTY:
             self.zobrist ^= ZOBRIST_PIECE[code][square]
+            self.eval_score -= CONTRIB[code][square]
             self.sq[square] = EMPTY
         return code
 
     # -- move application (allocation-free) ---------------------------------
 
     def apply(self, move: Move) -> None:
-        """Apply ``move`` in place, updating the hash incrementally."""
+        """Apply ``move`` in place, updating the hash + eval score incrementally."""
         z = ZOBRIST_PIECE
+        c = CONTRIB
         frm, to, captured = move.frm, move.to, move.captured
         mover = self.sq[frm]
         if captured != EMPTY:
             self.zobrist ^= z[captured][to]     # remove the captured piece
+            self.eval_score -= c[captured][to]
         self.zobrist ^= z[mover][frm]           # lift mover off frm
         self.zobrist ^= z[mover][to]            # drop mover on to
+        self.eval_score += c[mover][to] - c[mover][frm]
         self.sq[frm] = EMPTY
         self.sq[to] = mover
 
     def revert(self, move: Move) -> None:
         """Undo a move previously applied with :meth:`apply`."""
         z = ZOBRIST_PIECE
+        c = CONTRIB
         frm, to, captured = move.frm, move.to, move.captured
         mover = self.sq[to]
         self.zobrist ^= z[mover][to]
         self.zobrist ^= z[mover][frm]
+        self.eval_score += c[mover][frm] - c[mover][to]
         self.sq[frm] = mover
         self.sq[to] = captured
         if captured != EMPTY:
             self.zobrist ^= z[captured][to]
+            self.eval_score += c[captured][to]
 
     # -- queries ------------------------------------------------------------
 
@@ -114,4 +126,5 @@ class Board:
         b = Board()
         b.sq = self.sq[:]
         b.zobrist = self.zobrist
+        b.eval_score = self.eval_score
         return b

@@ -182,7 +182,7 @@ SEARCH_MAX_PLY = 96       # absolute recursion guard (with extensions)
 # Versioning
 # ---------------------------------------------------------------------------
 
-VERSION = "2.1"
+VERSION = "2.2"
 
 # ---------------------------------------------------------------------------
 # Custom pygame event IDs (assigned at runtime in main.py after pygame.init())
@@ -293,6 +293,96 @@ def _build_pst() -> tuple[tuple[int, ...], ...]:
 _PST = _build_pst()
 PST_BLUE = tuple(_PST[ADV_BLUE[sq]][sq // ROWS] for sq in range(NUM_SQUARES))
 PST_BLACK = tuple(_PST[ADV_BLACK[sq]][sq // ROWS] for sq in range(NUM_SQUARES))
+
+
+# ---------------------------------------------------------------------------
+# River-jump geometry (Lion/Tiger). Lives here so both the move generator and
+# the evaluator's contribution table can use it without an import cycle.
+# JUMP_TABLE[sq] -> tuple of (four_row, landing_sq, river_path).
+# HAS_JUMP[sq]: any jump exists (Lion). HAS_JUMP_TIGER[sq]: a 3-col (non-four_row)
+# jump exists (the only kind the Tiger may make).
+# ---------------------------------------------------------------------------
+
+JUMP_TABLE: dict[int, tuple[tuple[bool, int, tuple[int, ...]], ...]] = {}
+
+
+def _build_jump_table() -> tuple[tuple[bool, ...], tuple[bool, ...]]:
+    for c in range(COLS):
+        for r in range(ROWS):
+            if TERRAIN[c][r] == TERRAIN_RIVER:
+                continue
+            sq = c * ROWS + r
+            for (dc, dr) in DIRS:
+                nc, nr = c + dc, r + dr
+                if not (0 <= nc < COLS and 0 <= nr < ROWS):
+                    continue
+                if TERRAIN[nc][nr] != TERRAIN_RIVER:
+                    continue
+                path = []
+                lc, lr = nc, nr
+                while 0 <= lc < COLS and 0 <= lr < ROWS and TERRAIN[lc][lr] == TERRAIN_RIVER:
+                    path.append(lc * ROWS + lr)
+                    lc += dc
+                    lr += dr
+                if not (0 <= lc < COLS and 0 <= lr < ROWS):
+                    continue
+                if TERRAIN[lc][lr] == TERRAIN_RIVER:
+                    continue
+                entry = (dc == 0, lc * ROWS + lr, tuple(path))
+                JUMP_TABLE[sq] = JUMP_TABLE.get(sq, ()) + (entry,)
+    has_jump = tuple(sq in JUMP_TABLE for sq in range(NUM_SQUARES))
+    has_jump_tiger = tuple(
+        any(not four_row for (four_row, _lsq, _p) in JUMP_TABLE.get(sq, ()))
+        for sq in range(NUM_SQUARES)
+    )
+    return has_jump, has_jump_tiger
+
+
+HAS_JUMP, HAS_JUMP_TIGER = _build_jump_table()
+
+
+# ---------------------------------------------------------------------------
+# Evaluation contribution table: CONTRIB[code][sq] is a piece's full static
+# value from Blue's perspective (material + advancement + den proximity +
+# jump-readiness + rat-in-river), negated for Black. It lets the board keep the
+# Blue-perspective score incrementally (O(1) per move) instead of rescanning the
+# whole board at every search leaf. Piece codes are (color << 4) | animal, so
+# BLUE codes are 1..8 and BLACK codes 17..24; CONTRIB[0] (empty) is all zeros.
+# ---------------------------------------------------------------------------
+
+_MAX_PIECE_CODE = (1 << 4) | 8   # BLACK Elephant == 24
+_RAT_A, _TIGER_A, _LION_A = 1, 6, 7   # matches engine.pieces.Animal
+
+
+def _build_contrib() -> tuple[tuple[int, ...], ...]:
+    adv_w = EVAL_WEIGHTS["advancement_per_row"]
+    den_w = EVAL_WEIGHTS["den_proximity_per_step"]
+    den_max = EVAL_WEIGHTS["den_proximity_max_dist"]
+    jump_w = EVAL_WEIGHTS["jump_ready"]
+    river_w = EVAL_WEIGHTS["rat_blocks_river"]
+    table = [[0] * NUM_SQUARES for _ in range(_MAX_PIECE_CODE + 1)]
+    for color in (0, 1):                      # 0 = BLUE, 1 = BLACK
+        adv = ADV_BLUE if color == 0 else ADV_BLACK
+        dist = DIST_TO_BLACK_DEN if color == 0 else DIST_TO_BLUE_DEN
+        for animal in range(1, 9):
+            code = (color << 4) | animal
+            for sq in range(NUM_SQUARES):
+                v = PIECE_VALUES[animal]
+                v += adv[sq] * adv_w
+                d = dist[sq]
+                if d <= den_max:
+                    v += (den_max - d) * den_w
+                if animal == _LION_A and HAS_JUMP[sq]:
+                    v += jump_w
+                elif animal == _TIGER_A and HAS_JUMP_TIGER[sq]:
+                    v += jump_w
+                if animal == _RAT_A and IS_RIVER[sq]:
+                    v += river_w
+                table[code][sq] = v if color == 0 else -v
+    return tuple(tuple(row) for row in table)
+
+
+CONTRIB = _build_contrib()
 
 
 # ---------------------------------------------------------------------------
