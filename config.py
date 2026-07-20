@@ -162,11 +162,27 @@ EVAL_WEIGHTS = {
     "rat_blocks_river": 24,        # our rat sits on a river square
 }
 
+# Weight applied to the piece-square table (positional shaping), used only when
+# the search config enables it. Kept small relative to PIECE_VALUES.
+PST_WEIGHT = 3
+
+# ---------------------------------------------------------------------------
+# Search tuning (used by the enhanced negamax; see ai/minimax.py)
+# ---------------------------------------------------------------------------
+
+NMP_REDUCTION = 2         # base null-move reduction R
+NMP_MIN_DEPTH = 3         # never null-move below this depth
+NMP_MIN_PIECES = 3        # disable null-move when side-to-move has fewer pieces
+LMR_MIN_DEPTH = 3         # never reduce below this depth
+LMR_MIN_MOVE_INDEX = 3    # first N moves are searched at full depth
+ASPIRATION_DELTA = 40     # initial half-width of the root aspiration window
+SEARCH_MAX_PLY = 96       # absolute recursion guard (with extensions)
+
 # ---------------------------------------------------------------------------
 # Versioning
 # ---------------------------------------------------------------------------
 
-VERSION = "2.0"
+VERSION = "2.1"
 
 # ---------------------------------------------------------------------------
 # Custom pygame event IDs (assigned at runtime in main.py after pygame.init())
@@ -254,6 +270,29 @@ def _dist_table(den: tuple[int, int]) -> tuple[int, ...]:
 
 DIST_TO_BLACK_DEN = _dist_table(DEN_BLACK)   # distance to Black's den (Blue's target)
 DIST_TO_BLUE_DEN = _dist_table(DEN_BLUE)     # distance to Blue's den (Black's target)
+
+
+# Piece-square table (positional shaping), indexed by own-color advancement and
+# column. It rewards the central files (the direct approach to the den) and
+# advancement into the enemy half. Column-symmetric so there is no left/right
+# bias, which keeps eval(BLUE) == -eval(BLACK) and the symmetric start at 0.
+def _build_pst() -> tuple[tuple[int, ...], ...]:
+    col_weight = (0, 4, 7, 9, 7, 4, 0)      # peak on the central den file
+    table = []
+    for adv in range(ROWS):
+        row = []
+        for c in range(COLS):
+            v = col_weight[c]
+            if adv > ROWS // 2:               # enemy half: push centrally
+                v += (adv - ROWS // 2) * 2
+            row.append(v)
+        table.append(tuple(row))
+    return tuple(table)
+
+
+_PST = _build_pst()
+PST_BLUE = tuple(_PST[ADV_BLUE[sq]][sq // ROWS] for sq in range(NUM_SQUARES))
+PST_BLACK = tuple(_PST[ADV_BLACK[sq]][sq // ROWS] for sq in range(NUM_SQUARES))
 
 
 # ---------------------------------------------------------------------------

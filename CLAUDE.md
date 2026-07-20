@@ -15,6 +15,8 @@ python -m pytest tests\ -q                           &  REM run tests
 python -m pytest tests\ --cov --cov-report=term-missing  &  REM tests + coverage
 python -m ruff check .                               &  REM lint
 build.bat                                            &  REM test + package exe + zip
+python -m tools.strength_harness --a enhanced --b baseline --games 40 --nodes 6000  & REM A/B self-play
+python -m tools.ablation --games 200 --nodes 40000   &  REM parallel feature ablation
 ```
 
 The dev machine already has pygame/pytest/pyinstaller/ruff globally, so a venv
@@ -30,15 +32,25 @@ is optional. `build.bat` uses a venv if present, else the Python on PATH.
     Zobrist, allocation-free `apply`/`revert`), `rules.py` (capture legality),
     `move_generator.py` (moves + river jumps), `game_state.py` (turn, make/undo,
     win/draw).
-- `ai/` — `evaluator.py` (antisymmetric eval), `transposition.py`,
-  `minimax.py` (negamax α-β + iterative deepening + quiescence; `AIPlayer`).
+- `ai/` — `evaluator.py` (antisymmetric eval), `transposition.py`, `see.py`
+  (static exchange evaluation), `minimax.py` (negamax α-β + iterative deepening +
+  quiescence + `SearchConfig` feature flags; `AIPlayer`). The shipped engine is
+  `SearchConfig.tuned()`: PVS, null-move pruning, late-move reductions, history
+  heuristic, aspiration windows, and a den-threat extension. SEE and a
+  piece-square-table term exist behind flags but are **off** — self-play (200+
+  games) showed each is a net negative for this engine.
+- `tools/` — `strength_harness.py` (reproducible node-limited self-play between
+  two `SearchConfig`s) and `ablation.py` (parallel feature ablation vs baseline).
+  All strength claims are measured here, never assumed — in pure Python a change
+  that searches deeper can still play weaker.
 - `gui/` — `renderer.py` (all drawing + view-only flip), `input_handler.py`
   (pixel↔square, two-click), `audio.py`, `fonts.py`.
 - `controller.py` — state machine (menu/playing/over), event loop, background
   AI thread (results delivered via a custom pygame event, guarded by a token).
 - `main.py` — entry point: Windows DPI awareness + `SCALED|RESIZABLE` window.
 - `generate_assets.py` — draws all sprites/tiles/icon and synthesises sounds.
-- `tests/` — pytest suite (engine, AI, layout, input, integration).
+- `tests/` — pytest suite (engine, AI, SEE, search enhancements, layout, input,
+  integration).
 
 ## Key rules (keep consistent)
 

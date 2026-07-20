@@ -121,6 +121,20 @@ class GameState:
 
         self.result = self._compute_result(move, mover, detect_no_moves)
 
+    def make_null(self) -> None:
+        """Pass the turn to the opponent without moving (for null-move pruning).
+
+        Only touches ``to_move``/``hash`` — not the board, counts, clocks, or
+        repetition table — and must be paired with :meth:`undo_null` in the same
+        search frame (it is never used in a real game).
+        """
+        self.to_move ^= 1
+        self.hash = self._position_key()
+
+    def undo_null(self) -> None:
+        self.to_move ^= 1
+        self.hash = self._position_key()
+
     def undo_move(self) -> None:
         move, prev_halfmove = self._history.pop()
         # Drop the current position from the repetition table.

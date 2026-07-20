@@ -18,6 +18,9 @@ from config import (
     EVAL_WEIGHTS,
     IS_RIVER,
     PIECE_VALUES,
+    PST_BLACK,
+    PST_BLUE,
+    PST_WEIGHT,
 )
 from engine.move_generator import HAS_JUMP, HAS_JUMP_TIGER
 from engine.pieces import Animal, Color
@@ -32,9 +35,10 @@ _DEN_W = EVAL_WEIGHTS["den_proximity_per_step"]
 _DEN_MAX = EVAL_WEIGHTS["den_proximity_max_dist"]
 _JUMP_W = EVAL_WEIGHTS["jump_ready"]
 _RIVER_W = EVAL_WEIGHTS["rat_blocks_river"]
+_PST_W = PST_WEIGHT
 
 
-def _blue_score(board) -> int:
+def _blue_score(board, use_pst: bool = True) -> int:
     """Static evaluation from Blue's perspective (positive favors Blue)."""
     score = 0
     sq = board.sq
@@ -63,6 +67,8 @@ def _blue_score(board) -> int:
                 score += _JUMP_W
             if ratish:
                 score += _RIVER_W
+            if use_pst:
+                score += PST_BLUE[s] * _PST_W
         else:
             score -= val
             score -= ADV_BLACK[s] * _ADV_W
@@ -73,10 +79,12 @@ def _blue_score(board) -> int:
                 score -= _JUMP_W
             if ratish:
                 score -= _RIVER_W
+            if use_pst:
+                score -= PST_BLACK[s] * _PST_W
     return score
 
 
-def evaluate(state) -> int:
+def evaluate(state, use_pst: bool = True) -> int:
     """Score from the side-to-move's perspective (negamax convention)."""
-    blue = _blue_score(state.board)
+    blue = _blue_score(state.board, use_pst)
     return blue if state.to_move == _BLUE else -blue
