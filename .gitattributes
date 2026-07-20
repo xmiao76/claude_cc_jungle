@@ -1,2 +1,10 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalize line endings
+* text=auto eol=lf
+*.bat text eol=crlf
+
+# Treat binary assets as binary
+*.png binary
+*.ico binary
+*.wav binary
+*.zip binary
+*.exe binary

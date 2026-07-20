@@ -1,25 +1,26 @@
-"""Safe font construction.
-
-pygame.font.SysFont enumerates fonts via the Windows registry, and on some
-machines a registry value comes back as an int instead of a string, which makes
-pygame's internal os.path.splitext raise:
-
-    TypeError: expected str, bytes or os.PathLike object, not int
-
-Falling back to pygame.font.Font(None, size) (the bundled freesansbold) keeps
-the game usable on those systems.
-"""
+"""Cached font loading. Sizes are derived from the (fixed) cell size so text
+scales with the board; the whole surface is then uniformly scaled to the window
+by pygame's SCALED display, keeping text crisp at any resolution."""
 
 from __future__ import annotations
 
 import pygame
 
+_cache: dict[tuple[int, bool], pygame.font.Font] = {}
+_FAMILY = "arial,segoeui,sans"
 
-def safe_sysfont(name: str, size: int, bold: bool = False) -> pygame.font.Font:
-    try:
-        return pygame.font.SysFont(name, size, bold=bold)
-    except Exception:
-        font = pygame.font.Font(None, size)
-        if bold:
-            font.set_bold(True)
-        return font
+
+def get(size: int, bold: bool = False) -> pygame.font.Font:
+    size = max(8, int(size))
+    key = (size, bold)
+    font = _cache.get(key)
+    if font is None:
+        if not pygame.font.get_init():
+            pygame.font.init()
+        font = pygame.font.SysFont(_FAMILY, size, bold=bold)
+        _cache[key] = font
+    return font
+
+
+def clear() -> None:
+    _cache.clear()

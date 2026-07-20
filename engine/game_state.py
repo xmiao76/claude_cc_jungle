@@ -1,200 +1,186 @@
-"""GameState: wraps Board with turn tracking, history, and win detection."""
+"""Full game state: initial layout, turn tracking, make/undo, win/draw rules.
+
+``GameState`` wraps a :class:`~engine.board.Board` with everything the board
+deliberately omits — whose turn it is, the move history (for undo), the
+no-capture clock, repetition counts, and the game result.
+
+Result values:
+    None          -> game in progress
+    Color.BLUE    -> Blue has won
+    Color.BLACK   -> Black has won
+    DRAW          -> drawn (threefold repetition or the no-capture limit)
+"""
 
 from __future__ import annotations
 
-from engine.board import Board, Move
-from engine.pieces import (
-    Color, ANIMAL_NAMES, piece_id_color, piece_id_animal,
-)
-from engine.rules import check_win, WinResult
-from engine.move_generator import generate_legal_moves
+from config import DEN_BLACK_SQ, DEN_BLUE_SQ, ROWS
+from engine.board import ZOBRIST_SIDE, Board, Move
+from engine.move_generator import generate_moves, has_any_move
+from engine.pieces import Animal, Color, code_color
+
+DRAW = "draw"
+DRAW_HALFMOVE_LIMIT = 100   # plies with no capture -> draw (50 moves per side)
+REPETITION_LIMIT = 3        # a position seen this many times -> draw
 
 
-def _square_name(c: int, r: int) -> str:
-    """Convert (col, row) to algebraic-like notation, e.g. (3, 0) -> 'D1'."""
-    return f"{chr(ord('A') + c)}{r + 1}"
+def _initial_setup() -> list[tuple[int, int, int, int]]:
+    """Standard Dou Shou Qi layout as ``(col, row, color, animal)`` tuples.
+
+    Black occupies the top (rows 0-2); Blue is the 180-degree rotation of
+    Black, so the start position is point-symmetric and fair.
+    """
+    black = [
+        (0, 0, Animal.LION), (6, 0, Animal.TIGER),
+        (1, 1, Animal.DOG), (5, 1, Animal.CAT),
+        (0, 2, Animal.RAT), (2, 2, Animal.LEOPARD),
+        (4, 2, Animal.WOLF), (6, 2, Animal.ELEPHANT),
+    ]
+    setup: list[tuple[int, int, int, int]] = []
+    for (c, r, animal) in black:
+        setup.append((c, r, int(Color.BLACK), int(animal)))
+        setup.append((6 - c, 8 - r, int(Color.BLUE), int(animal)))
+    return setup
 
 
-def format_move(move: Move, mover_pid: int, move_number: int) -> str:
-    """Format a move for the history panel, e.g. '12. B Lion E1->D2 xDog'."""
-    color = piece_id_color(mover_pid)
-    color_tag = "B" if color == Color.BLUE else "K"
-    animal = ANIMAL_NAMES[piece_id_animal(mover_pid)]
-    src = _square_name(move.fc, move.fr)
-    dst = _square_name(move.tc, move.tr)
-    base = f"{move_number}. {color_tag} {animal} {src}->{dst}"
-    if move.captured:
-        cap = ANIMAL_NAMES[piece_id_animal(move.captured)]
-        base += f" x{cap}"
-    return base
+INITIAL_SETUP = _initial_setup()
 
-
-_FIFTY_MOVE_PLIES = 100   # 50 full moves without a capture = draw
+# Each color's target den (entering it wins).
+ENEMY_DEN = {int(Color.BLUE): DEN_BLACK_SQ, int(Color.BLACK): DEN_BLUE_SQ}
 
 
 class GameState:
-    """Complete game state: board + whose turn + move history + result."""
-
-    __slots__ = (
-        "board", "turn", "history", "mover_history", "result", "_legal_cache",
-        "_hash_history", "_halfmove_clock", "_halfmove_history",
-    )
-
     def __init__(self) -> None:
         self.board = Board()
-        self.turn: Color = Color.BLUE   # Blue moves first
-        self.history: list[Move] = []
-        self.mover_history: list[int] = []   # parallel list of mover piece_ids
-        self.result: WinResult | None = None
-        self._legal_cache: list[Move] | None = None
-        self._hash_history: list[int] = []
-        self._halfmove_clock: int = 0
-        self._halfmove_history: list[int] = []
+        self.to_move: int = int(Color.BLUE)
+        self.result: object | None = None
+        self.halfmove_clock: int = 0
+        self.hash: int = 0
+        self.counts = [0, 0]                     # [blue, black] piece counts
+        self._history: list[tuple[Move, int]] = []
+        self._rep: dict[int, int] = {}
+        self.new_game()
+
+    # -- setup --------------------------------------------------------------
 
     def new_game(self) -> None:
-        """Reset to starting position."""
-        self.board.setup_starting_position()
-        self.turn = Color.BLUE
-        self.history.clear()
-        self.mover_history.clear()
+        self.board.clear()
+        for (c, r, color, animal) in INITIAL_SETUP:
+            self.board.set_piece(c * ROWS + r, color, animal)
+        self.to_move = int(Color.BLUE)
         self.result = None
-        self._legal_cache = None
-        self._hash_history.clear()
-        self._halfmove_clock = 0
-        self._halfmove_history.clear()
+        self.halfmove_clock = 0
+        self.counts = [self.board.count(0), self.board.count(1)]
+        self._history.clear()
+        self.hash = self._position_key()
+        self._rep = {self.hash: 1}
 
-    # ------------------------------------------------------------------
-    # Move application / undo
-    # ------------------------------------------------------------------
-
-    def apply_move(self, move: Move) -> None:
-        """Apply move, update turn, check for win."""
-        # Record current position hash before mutation (for repetition).
-        self._hash_history.append(self.board.turn_hash(self.turn))
-        self._halfmove_history.append(self._halfmove_clock)
-
-        mover_pid = self.board.get(move.fc, move.fr)
-        self.board.make_move(move)
-        self.history.append(move)
-        self.mover_history.append(mover_pid)
-        self._legal_cache = None
-
-        if move.captured:
-            self._halfmove_clock = 0
-        else:
-            self._halfmove_clock += 1
-
-        # Check win *after* the move
-        next_turn = Color.BLACK if self.turn == Color.BLUE else Color.BLUE
-        self.result = check_win(self.board, move, next_turn)
-        self.turn = next_turn
-
-    def undo_move(self) -> None:
-        """Undo the last move (used by AI search and human Undo)."""
-        if not self.history:
-            return
-        move = self.history.pop()
-        if self.mover_history:
-            self.mover_history.pop()
-        self.board.unmake_move(move)
-        self.turn = Color.BLUE if self.turn == Color.BLACK else Color.BLACK
+    def setup_position(self, pieces: dict[tuple[int, int], tuple[int, int]],
+                       to_move: int = int(Color.BLUE)) -> None:
+        """Test helper: place an arbitrary position. ``pieces`` maps
+        ``(col, row) -> (color, animal)``."""
+        self.board.clear()
+        for (c, r), (color, animal) in pieces.items():
+            self.board.set_piece(c * ROWS + r, int(color), int(animal))
+        self.to_move = int(to_move)
         self.result = None
-        self._legal_cache = None
-        if self._hash_history:
-            self._hash_history.pop()
-        if self._halfmove_history:
-            self._halfmove_clock = self._halfmove_history.pop()
+        self.halfmove_clock = 0
+        self.counts = [self.board.count(0), self.board.count(1)]
+        self._history.clear()
+        self.hash = self._position_key()
+        self._rep = {self.hash: 1}
 
-    def apply_null(self) -> None:
-        """Pass the turn without moving (null-move pruning support).
+    # -- hashing ------------------------------------------------------------
 
-        Used only inside AI search; not a legal game move.
-        """
-        self._hash_history.append(self.board.turn_hash(self.turn))
-        self._halfmove_history.append(self._halfmove_clock)
-        self.history.append(None)  # type: ignore[arg-type]
-        self.mover_history.append(0)
-        self._halfmove_clock += 1
-        self.turn = Color.BLACK if self.turn == Color.BLUE else Color.BLUE
-        self._legal_cache = None
+    def _position_key(self) -> int:
+        key = self.board.zobrist
+        if self.to_move == int(Color.BLACK):
+            key ^= ZOBRIST_SIDE
+        return key
 
-    def undo_null(self) -> None:
-        """Reverse a previous apply_null."""
-        self.history.pop()
-        self.mover_history.pop()
-        self.turn = Color.BLUE if self.turn == Color.BLACK else Color.BLACK
-        if self._hash_history:
-            self._hash_history.pop()
-        if self._halfmove_history:
-            self._halfmove_clock = self._halfmove_history.pop()
-        self._legal_cache = None
-
-    # ------------------------------------------------------------------
-    # Queries
-    # ------------------------------------------------------------------
+    # -- moves --------------------------------------------------------------
 
     def legal_moves(self) -> list[Move]:
-        if self._legal_cache is None:
-            self._legal_cache = generate_legal_moves(self.board, self.turn)
-        return self._legal_cache
-
-    def is_repetition(self) -> bool:
-        """True if the current position has occurred before in this game."""
-        cur = self.board.turn_hash(self.turn)
-        return cur in self._hash_history
-
-    def is_50_move_draw(self) -> bool:
-        return self._halfmove_clock >= _FIFTY_MOVE_PLIES
-
-    def is_terminal(self) -> bool:
         if self.result is not None:
-            return True
-        if self.is_50_move_draw():
-            return True
-        if not self.legal_moves():
-            # No legal moves = current player loses (stalemate rule)
-            return True
-        return False
+            return []
+        return generate_moves(self.board, self.to_move)
 
-    def get_winner(self) -> Color | None:
-        if self.result is not None:
-            return self.result.winner
-        if self.is_50_move_draw():
-            return None
-        if not self.legal_moves():
-            # Current player has no moves → they lose
-            return Color.BLACK if self.turn == Color.BLUE else Color.BLUE
+    def make_move(self, move: Move, detect_no_moves: bool = True) -> None:
+        mover = self.to_move
+        self._history.append((move, self.halfmove_clock))
+
+        self.board.apply(move)
+        if move.captured != 0:
+            self.counts[code_color(move.captured)] -= 1
+            self.halfmove_clock = 0
+        else:
+            self.halfmove_clock += 1
+
+        self.to_move = mover ^ 1
+        self.hash = self._position_key()
+        self._rep[self.hash] = self._rep.get(self.hash, 0) + 1
+
+        self.result = self._compute_result(move, mover, detect_no_moves)
+
+    def undo_move(self) -> None:
+        move, prev_halfmove = self._history.pop()
+        # Drop the current position from the repetition table.
+        n = self._rep.get(self.hash, 0)
+        if n <= 1:
+            self._rep.pop(self.hash, None)
+        else:
+            self._rep[self.hash] = n - 1
+
+        self.to_move ^= 1
+        self.board.revert(move)
+        if move.captured != 0:
+            self.counts[code_color(move.captured)] += 1
+        self.halfmove_clock = prev_halfmove
+        self.hash = self._position_key()
+        self.result = None
+
+    # -- result -------------------------------------------------------------
+
+    def _compute_result(self, move: Move, mover: int, detect_no_moves: bool):
+        # 1. Den entry: the mover reached the enemy den.
+        if move.to == ENEMY_DEN[mover]:
+            return Color(mover)
+        # 2. Elimination: the opponent has no pieces left.
+        if self.counts[self.to_move] == 0:
+            return Color(mover)
+        # 3. Draw: threefold repetition or the no-capture limit.
+        if self._rep.get(self.hash, 0) >= REPETITION_LIMIT:
+            return DRAW
+        if self.halfmove_clock >= DRAW_HALFMOVE_LIMIT:
+            return DRAW
+        # 4. Stalemate == loss: the side to move has no legal reply.
+        if detect_no_moves and not has_any_move(self.board, self.to_move):
+            return Color(mover)
         return None
 
-    def is_draw(self) -> bool:
-        """True for explicit draw conditions (50-move; 3-fold not auto-claimed)."""
-        return self.is_50_move_draw() and self.result is None
+    @property
+    def game_over(self) -> bool:
+        return self.result is not None
 
-    def copy(self) -> "GameState":
-        gs = GameState()
+    def winner(self) -> Color | None:
+        return self.result if isinstance(self.result, Color) else None
+
+    def is_draw(self) -> bool:
+        return self.result == DRAW
+
+    # -- utilities ----------------------------------------------------------
+
+    def clone(self) -> GameState:
+        gs = GameState.__new__(GameState)
         gs.board = self.board.copy()
-        gs.turn = self.turn
-        gs.history = self.history[:]
-        gs.mover_history = self.mover_history[:]
+        gs.to_move = self.to_move
         gs.result = self.result
-        gs._hash_history = self._hash_history[:]
-        gs._halfmove_clock = self._halfmove_clock
-        gs._halfmove_history = self._halfmove_history[:]
+        gs.halfmove_clock = self.halfmove_clock
+        gs.hash = self.hash
+        gs.counts = self.counts[:]
+        gs._history = self._history[:]
+        gs._rep = dict(self._rep)
         return gs
 
-    # ------------------------------------------------------------------
-    # Formatted history (for UI)
-    # ------------------------------------------------------------------
-
-    def formatted_history(self, n: int | None = None) -> list[str]:
-        """Return human-readable strings for the last *n* moves (or all)."""
-        moves = self.history
-        movers = self.mover_history
-        out: list[str] = []
-        i = 0
-        for m, pid in zip(moves, movers):
-            i += 1
-            if m is None:
-                continue  # skip null-move entries
-            out.append(format_move(m, pid, i))
-        return out[-n:] if n else out
+    def piece_at(self, col: int, row: int):
+        from engine.pieces import decode
+        return decode(self.board.sq[col * ROWS + row])

@@ -27,9 +27,9 @@ Rule clarification for river jumping:
 - Implement the lion and tiger river-jump behavior using this explicit interpretation.
 - The lion is stronger than the tiger for river jumping.
 - The lion can jump across the river both horizontally and vertically.
-- Horizontal lion jump means jumping across 3 river squares to the next non-water square on the opposite side.
-- Vertical lion jump means jumping across 2 river squares to the next non-water square on the opposite side.
-- The tiger can jump only vertically across 2 river squares to the next non-water square on the opposite side.
+- Horizontal lion jump means jumping 4 rows across river.
+- Vertical lion jump means jumping 3 cols across river.
+- The tiger can jump only vertically 3 cols across river.
 - Do not assume tiger has the same horizontal jump ability as lion unless the implementation explicitly supports it as an optional documented variant.
 - Any rat-blocking behavior must still be handled correctly according to the selected ruleset.
 
@@ -40,6 +40,7 @@ UI requirements:
 - Include good usability details such as piece selection highlights, legal move indicators, capture feedback, turn display, and win/loss messaging.
 - Support flipping the board upside down as a view option. This feature must only rotate/flip the visual board orientation for display. It must not change the game state, must not swap sides internally, and must not change whose turn it is.
 - Support a clear UI option to choose whether the human player or the AI moves first. This setting must affect only game start order and must work correctly together with the board-flip display option.
+- Ensure the packaged .exe window renders well across different Windows screen resolutions, window sizes, DPI scaling settings, and common display aspect ratios. The layout should scale cleanly without clipped controls, distorted board graphics, overlapping UI elements, or unreadable text.
 - Avoid placeholder-style visuals in the final release except optionally in debug mode.
 
 Release requirements:
@@ -66,5 +67,4 @@ Please provide:
 - where prompt.md should be stored
 - completion criteria
 
-Completion is only achieved when the game is playable and stable, completes full games correctly, passes required automated tests, includes a tested packaged .exe in the release folder, includes README.txt or README.md with the model/code-agent statement, and includes prompt.md in the codebase.
-
+Completion is only achieved when the game is playable and stable, completes full games correctly, passes required automated tests, includes a tested packaged .exe in the release folder, includes README.txt or README.md with the model/code-agent statement, includes prompt.md in the codebase, and the packaged application renders correctly across different Windows resolutions and DPI/display scaling settings.

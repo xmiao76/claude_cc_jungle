@@ -1,14 +1,32 @@
-"""Global constants for the Jungle board game."""
+"""Global constants and precomputed lookup tables for the Jungle board game.
+
+Coordinates are ``(col, row)`` with ``0 <= col < COLS`` and ``0 <= row < ROWS``.
+Row 0 is the top edge (Black's home / den); row ``ROWS-1`` is the bottom edge
+(Blue's home / den). Many hot paths index a *flat* square number instead of a
+``(col, row)`` pair::
+
+    sq = col * ROWS + row      # 0 .. NUM_SQUARES-1
+
+The flat tables at the bottom of this module (TERRAIN_FLAT, NEIGHBORS,
+TRAP_OWNER, ...) are all indexed by that square number.
+"""
+
+from __future__ import annotations
 
 import os
 import sys
 
 # ---------------------------------------------------------------------------
-# Asset path resolution (works both in development and as a PyInstaller exe)
+# Asset path resolution (works both in development and inside a PyInstaller exe)
 # ---------------------------------------------------------------------------
 
+
 def asset_path(relative_path: str) -> str:
-    """Return absolute path to a bundled asset, works with PyInstaller --onefile."""
+    """Return the absolute path to a bundled asset.
+
+    PyInstaller unpacks bundled data to a temporary dir exposed as
+    ``sys._MEIPASS``; in development we resolve relative to this file.
+    """
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, relative_path)
 
@@ -19,6 +37,7 @@ def asset_path(relative_path: str) -> str:
 
 COLS = 7
 ROWS = 9
+NUM_SQUARES = COLS * ROWS
 
 # Terrain type constants
 TERRAIN_LAND = 0
@@ -26,21 +45,22 @@ TERRAIN_RIVER = 1
 TERRAIN_TRAP = 2
 TERRAIN_DEN = 3
 
-# Den positions
+# Den positions (col, row)
 DEN_BLACK = (3, 0)   # Black's den (top)
 DEN_BLUE = (3, 8)    # Blue's den (bottom)
 
-# Trap positions
+# Trap positions: the three squares orthogonally around each den.
 TRAPS_BLACK = {(2, 0), (4, 0), (3, 1)}
 TRAPS_BLUE = {(2, 8), (4, 8), (3, 7)}
 
-# River squares: two 2×3 rectangles
-RIVER_1 = {(1, 3), (2, 3), (1, 4), (2, 4), (1, 5), (2, 5)}
-RIVER_2 = {(4, 3), (5, 3), (4, 4), (5, 4), (4, 5), (5, 5)}
-RIVER_SQUARES = RIVER_1 | RIVER_2
+# River squares: two 2x3 rectangles (cols 1-2 and 4-5, rows 3-5).
+RIVER_LEFT = {(c, r) for c in (1, 2) for r in (3, 4, 5)}
+RIVER_RIGHT = {(c, r) for c in (4, 5) for r in (3, 4, 5)}
+RIVER_SQUARES = RIVER_LEFT | RIVER_RIGHT
 
-# Precomputed terrain map: terrain[col][row]
+
 def _build_terrain() -> list[list[int]]:
+    """Terrain grid indexed ``terrain[col][row]``."""
     terrain = [[TERRAIN_LAND] * ROWS for _ in range(COLS)]
     for (c, r) in RIVER_SQUARES:
         terrain[c][r] = TERRAIN_RIVER
@@ -50,45 +70,57 @@ def _build_terrain() -> list[list[int]]:
         terrain[c][r] = TERRAIN_DEN
     return terrain
 
+
 TERRAIN = _build_terrain()
 
 # ---------------------------------------------------------------------------
-# Colors (RGB)
+# Colors (RGB) — a warm, readable palette
 # ---------------------------------------------------------------------------
 
-COLOR_BG = (30, 30, 30)
-COLOR_LAND = (139, 178, 90)
-COLOR_RIVER = (64, 133, 196)
-COLOR_TRAP = (180, 130, 50)
-COLOR_DEN = (220, 180, 60)
-COLOR_GRID = (20, 20, 20)
-COLOR_HIGHLIGHT_SELECT = (255, 215, 0)      # gold for selected piece
-COLOR_HIGHLIGHT_MOVE = (100, 230, 100)       # green for legal move targets
-COLOR_CAPTURE_FLASH = (220, 50, 50)          # red flash on capture
-COLOR_BLUE_PIECE = (60, 120, 220)
-COLOR_BLACK_PIECE = (40, 40, 40)
-COLOR_TEXT_LIGHT = (240, 240, 240)
-COLOR_TEXT_DARK = (20, 20, 20)
-COLOR_PANEL_BG = (25, 25, 25)
-COLOR_BUTTON_NORMAL = (70, 70, 100)
-COLOR_BUTTON_HOVER = (100, 100, 160)
-COLOR_OVERLAY_BG = (0, 0, 0, 180)           # semi-transparent
+COLOR_BG = (24, 28, 24)
+COLOR_LAND = (150, 190, 104)
+COLOR_LAND_ALT = (139, 178, 92)          # checkerboard shade
+COLOR_RIVER = (74, 144, 202)
+COLOR_RIVER_ALT = (86, 156, 214)
+COLOR_TRAP = (198, 142, 66)
+COLOR_DEN_BLACK = (206, 120, 120)
+COLOR_DEN_BLUE = (120, 150, 214)
+COLOR_GRID = (34, 40, 34)
+COLOR_HIGHLIGHT_SELECT = (255, 215, 0)   # gold for the selected piece
+COLOR_HIGHLIGHT_MOVE = (96, 232, 120)    # green for legal-move targets
+COLOR_HIGHLIGHT_LAST = (255, 235, 150)   # last-move trail
+COLOR_CAPTURE_FLASH = (222, 66, 55)      # red flash on capture
+COLOR_BLUE_PIECE = (58, 118, 220)
+COLOR_BLUE_PIECE_DK = (34, 74, 150)
+COLOR_BLACK_PIECE = (52, 56, 66)
+COLOR_BLACK_PIECE_DK = (28, 30, 38)
+COLOR_TEXT_LIGHT = (242, 244, 240)
+COLOR_TEXT_DARK = (24, 24, 24)
+COLOR_TEXT_MUTED = (170, 178, 170)
+COLOR_PANEL_BG = (30, 34, 32)
+COLOR_PANEL_ACCENT = (44, 50, 46)
+COLOR_BUTTON_NORMAL = (64, 96, 128)
+COLOR_BUTTON_HOVER = (92, 132, 168)
+COLOR_BUTTON_TEXT = (238, 242, 245)
+COLOR_OVERLAY_BG = (0, 0, 0, 190)        # semi-transparent
 
 # ---------------------------------------------------------------------------
-# Display
+# Display (defaults; main.py recomputes CELL_SIZE / window size at startup)
 # ---------------------------------------------------------------------------
 
-CELL_SIZE = 80          # pixels per cell
-BOARD_OFFSET_X = 40     # left margin for the board
-BOARD_OFFSET_Y = 40     # top margin for the board
-PANEL_WIDTH = 220       # side panel width
+CELL_SIZE = 80          # pixels per board cell
+BOARD_MARGIN = 36       # margin around the board
+PANEL_WIDTH = 250       # side panel width
+CELL_MIN = 52           # clamp range used by the screen-aware sizing helper
+CELL_MAX = 92
 
-WINDOW_WIDTH = COLS * CELL_SIZE + BOARD_OFFSET_X * 2 + PANEL_WIDTH
-WINDOW_HEIGHT = ROWS * CELL_SIZE + BOARD_OFFSET_Y * 2
+WINDOW_WIDTH = COLS * CELL_SIZE + BOARD_MARGIN * 2 + PANEL_WIDTH
+WINDOW_HEIGHT = ROWS * CELL_SIZE + BOARD_MARGIN * 2
 WINDOW_TITLE = "Jungle - Dou Shou Qi"
 
 FPS = 60
-CAPTURE_FLASH_MS = 300  # duration of capture animation
+CAPTURE_FLASH_MS = 320  # duration of the capture flash
+MOVE_ANIM_MS = 140      # duration of the slide animation for a played move
 
 # ---------------------------------------------------------------------------
 # AI
@@ -96,137 +128,91 @@ CAPTURE_FLASH_MS = 300  # duration of capture animation
 
 AI_DEPTH_EASY = 3
 AI_DEPTH_MEDIUM = 5
-AI_TIME_HARD_MS = 2000   # iterative deepening time budget for Hard
+AI_TIME_HARD_MS = 2000        # iterative-deepening time budget for Hard
+AI_MAX_DEPTH = 24             # hard ceiling on iterative deepening
 
 DIFFICULTY_LABELS = ["Easy", "Medium", "Hard"]
 DIFFICULTY_SUBTEXT = [
-    "3-ply search · instant",
-    "5-ply search · ~0.5s",
-    "iterative · ~2s",
+    "3-ply search - instant",
+    "5-ply search - fast",
+    "timed search - ~2s",
 ]
 
-USE_OPENING_BOOK = True
-
-# Material values per Animal rank (1=Rat .. 8=Elephant)
+# Material value per Animal rank (1=Rat .. 8=Elephant).
 PIECE_VALUES: dict[int, int] = {
-    1: 100,   # Rat
-    2: 200,   # Cat
-    3: 300,   # Dog
-    4: 400,   # Wolf
-    5: 500,   # Leopard
-    6: 600,   # Tiger
-    7: 700,   # Lion
-    8: 800,   # Elephant
+    1: 250,   # Rat  (worth more than raw rank: it captures the Elephant)
+    2: 180,   # Cat
+    3: 260,   # Dog
+    4: 340,   # Wolf
+    5: 440,   # Leopard
+    6: 560,   # Tiger
+    7: 720,   # Lion
+    8: 900,   # Elephant
 }
 
-# Positional evaluation weights (centralized for tuning)
+# Positional evaluation weights. These are exactly the terms the evaluator
+# implements (see ai/evaluator.py); the eval is kept deliberately lean so the
+# pure-Python search stays fast. The score is antisymmetric (no side-to-move
+# "tempo" term), which keeps the AI unbiased and the symmetric start position 0.
 EVAL_WEIGHTS = {
-    "advancement_per_row": 10,
-    "den_proximity_max_dist": 3,
-    "den_proximity_per_step": 30,
-    "rat_in_water": 40,
-    "rat_adjacent_to_enemy_elephant": 60,
-    "trap_control": 80,
-    # Added in stronger-engine refactor
-    "mobility": 2,                 # per-extra-pseudo-move
-    "den_defender": 25,            # per friendly piece within 2 of own den
-    "jump_ready": 20,              # Lion/Tiger has at least one jump available
-    "rat_blocks_river": 35,        # our rat sits on river square
-    "tempo": 10,                   # side-to-move bonus
-    "advancement_acceleration": 6, # extra per row past midline (row 4)
-    "delta_margin": 200,           # quiescence delta-pruning margin
-    # Added by the stronger-engine plan (Tasks 5-6)
-    "pst": 1,                      # piece-square table multiplier
-    "den_threat": 45,              # per enemy piece that can reach an undefended
-                                   # square next to our den (and the mirror)
-    # Added in v1.5
-    "hanging": 8,                  # per undefended piece attacked by an adjacent
-                                   # enemy, x piece_value/100 (use_hanging_penalty)
+    "advancement_per_row": 8,      # reward pushing toward the enemy den
+    "den_proximity_per_step": 26,  # closer to the enemy den is better
+    "den_proximity_max_dist": 4,   # only the last few steps count
+    "jump_ready": 18,              # Lion/Tiger positioned to leap the river
+    "rat_blocks_river": 24,        # our rat sits on a river square
 }
 
-# Tuned weight table (v1.5, use_tuned_weights): produced by
-# `python -m tools.tune_eval fit` over harvested self-play positions.
-# Starts as a copy of the hand weights; replaced by the fitted values only
-# after the tuned set passes its own self-play gate. The frozen v13/v14/
-# baseline configs always read EVAL_WEIGHTS above.
-EVAL_WEIGHTS_TUNED = dict(EVAL_WEIGHTS)
-
-QUIESCENCE_MAX_PLY = 4    # cap on quiescence search depth
-
-
 # ---------------------------------------------------------------------------
-# Piece-square table (positional shaping)
-# ---------------------------------------------------------------------------
-# Indexed [advancement][col], where advancement is measured from the piece's own
-# back rank (0) toward the enemy den (ROWS-1). Applied per-piece using the
-# piece's OWN-color advancement (added for own pieces, subtracted for opponent
-# pieces) so the evaluation stays antisymmetric: eval(BLUE) == -eval(BLACK).
-# The table is column-symmetric (value at col c == col COLS-1-c) so there is no
-# left/right bias and the symmetric starting position evaluates to exactly 0.
-# It peaks on the central file — the direct approach to the den — and rewards
-# central advancement into the enemy half. Magnitudes are small vs PIECE_VALUES.
-def _build_pst() -> list[list[int]]:
-    col_weight = [0, 5, 9, 12, 9, 5, 0]   # symmetric; peak on the central den file
-    table = [[0] * COLS for _ in range(ROWS)]
-    for adv in range(ROWS):
-        for c in range(COLS):
-            v = col_weight[c]
-            if adv > ROWS // 2:           # enemy half: central advance is best
-                v += (adv - ROWS // 2) * (col_weight[c] // 6)
-            table[adv][c] = v
-    return table
-
-
-PST_TABLE = _build_pst()
-
-# Search tuning (added by stronger-engine plan)
-NMP_REDUCTION = 2          # depth reduction R for null-move pruning
-NMP_MIN_DEPTH = 3
-NMP_MIN_PIECES = 3         # disable NMP if side-to-move has fewer pieces
-LMR_MIN_DEPTH = 3
-LMR_MOVES_BEFORE = 4       # number of full-depth moves before reductions kick in
-ASPIRATION_DELTA = 50
-ASPIRATION_MIN_DEPTH = 4
-
-# Stability-based time management (v1.4, use_stability_time). Unused nominal
-# budget accumulates in a per-player bank; searches whose best move keeps
-# flipping may draw an extension from it, while stable searches stop early.
-STABILITY_STOP_ITERS = 3       # consecutive same-best iterations before early stop
-STABILITY_STOP_MIN_DEPTH = 6   # never early-stop below this completed depth
-STABILITY_STOP_FRAC = 0.4      # min fraction of the nominal budget used first
-TIME_BANK_MAX_FRAC = 2.0       # bank cap, as a multiple of the nominal budget
-TIME_EXTEND_MAX_FRAC = 0.5     # max per-move extension drawn from the bank
-
-# ---------------------------------------------------------------------------
-# Flat-board tables (v1.5). Square index: sq = col * ROWS + row (0..62).
-# The engine hot paths (movegen, rules, eval, SEE) index these flat tables
-# instead of doing per-step coordinate math and bounds checks.
+# Versioning
 # ---------------------------------------------------------------------------
 
-NUM_SQUARES = COLS * ROWS
+VERSION = "2.0"
 
-SQ_C = tuple(sq // ROWS for sq in range(NUM_SQUARES))
-SQ_R = tuple(sq % ROWS for sq in range(NUM_SQUARES))
+# ---------------------------------------------------------------------------
+# Custom pygame event IDs (assigned at runtime in main.py after pygame.init())
+# ---------------------------------------------------------------------------
+
+AI_MOVE_EVENT_TYPE: int = -1
+
+# ===========================================================================
+# Flat lookup tables (indexed by sq = col * ROWS + row)
+# ===========================================================================
+
+
+def sq_of(col: int, row: int) -> int:
+    return col * ROWS + row
+
+
+def col_of(sq: int) -> int:
+    return sq // ROWS
+
+
+def row_of(sq: int) -> int:
+    return sq % ROWS
+
+
+SQ_COL = tuple(sq // ROWS for sq in range(NUM_SQUARES))
+SQ_ROW = tuple(sq % ROWS for sq in range(NUM_SQUARES))
 
 TERRAIN_FLAT = tuple(TERRAIN[sq // ROWS][sq % ROWS] for sq in range(NUM_SQUARES))
 IS_RIVER = tuple(t == TERRAIN_RIVER for t in TERRAIN_FLAT)
+IS_TRAP = tuple(t == TERRAIN_TRAP for t in TERRAIN_FLAT)
+IS_DEN = tuple(t == TERRAIN_DEN for t in TERRAIN_FLAT)
 
-DEN_BLACK_SQ = DEN_BLACK[0] * ROWS + DEN_BLACK[1]
-DEN_BLUE_SQ = DEN_BLUE[0] * ROWS + DEN_BLUE[1]
+DEN_BLACK_SQ = sq_of(*DEN_BLACK)
+DEN_BLUE_SQ = sq_of(*DEN_BLUE)
+
+# Direction order matches historical move-generation order; move-list order
+# (and thus AI search-tree shape) depends on it, so do not reorder.
+DIRS = ((0, -1), (0, 1), (-1, 0), (1, 0))
 
 
 def _build_neighbors() -> tuple[tuple[int, ...], ...]:
-    """In-bounds orthogonal neighbors per square.
-
-    Direction order (0,-1),(0,1),(-1,0),(1,0) matches the move generator's
-    historical _DIRS order — move-list order (and therefore search-tree
-    shape) depends on it. Do not reorder.
-    """
     out = []
     for sq in range(NUM_SQUARES):
         c, r = sq // ROWS, sq % ROWS
         nbs = []
-        for (dc, dr) in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+        for (dc, dr) in DIRS:
             nc, nr = c + dc, r + dr
             if 0 <= nc < COLS and 0 <= nr < ROWS:
                 nbs.append(nc * ROWS + nr)
@@ -236,27 +222,28 @@ def _build_neighbors() -> tuple[tuple[int, ...], ...]:
 
 NEIGHBORS = _build_neighbors()
 
-# Trap rank-zeroing per square: 0 = none, 1 = zeroes BLUE pieces (the traps
-# around Black's den), 2 = zeroes BLACK pieces (the traps around Blue's den).
-def _build_trap_zeroes() -> tuple[int, ...]:
-    tz = [0] * NUM_SQUARES
+
+def _build_trap_owner() -> tuple[int, ...]:
+    """TRAP_OWNER[sq]: the color that *owns* the trap on ``sq``.
+
+    A piece standing on a trap owned by the OTHER color has its rank reduced to
+    0. ``-1`` means the square is not a trap. Traps around Black's den (top) are
+    owned by Black (=1); traps around Blue's den (bottom) by Blue (=0). Values
+    match ``engine.pieces.Color`` (BLUE=0, BLACK=1).
+    """
+    owner = [-1] * NUM_SQUARES
     for (c, r) in TRAPS_BLACK:
-        tz[c * ROWS + r] = 1
+        owner[c * ROWS + r] = 1   # Color.BLACK
     for (c, r) in TRAPS_BLUE:
-        tz[c * ROWS + r] = 2
-    return tuple(tz)
+        owner[c * ROWS + r] = 0   # Color.BLUE
+    return tuple(owner)
 
 
-TRAP_ZEROES = _build_trap_zeroes()
+TRAP_OWNER = _build_trap_owner()
 
-# Per-color evaluation geometry: own-color advancement, PST value, Manhattan
-# distance to each den. All pure geometry (weights are applied at runtime so
-# the tables stay valid under tuned weight sets).
+# Own-color advancement per square (0 at own back rank .. ROWS-1 at enemy den).
 ADV_BLUE = tuple(ROWS - 1 - (sq % ROWS) for sq in range(NUM_SQUARES))
 ADV_BLACK = tuple(sq % ROWS for sq in range(NUM_SQUARES))
-
-PST_BLUE = tuple(PST_TABLE[ADV_BLUE[sq]][sq // ROWS] for sq in range(NUM_SQUARES))
-PST_BLACK = tuple(PST_TABLE[ADV_BLACK[sq]][sq // ROWS] for sq in range(NUM_SQUARES))
 
 
 def _dist_table(den: tuple[int, int]) -> tuple[int, ...]:
@@ -265,18 +252,28 @@ def _dist_table(den: tuple[int, int]) -> tuple[int, ...]:
                  for sq in range(NUM_SQUARES))
 
 
-DIST_TO_BLACK_DEN = _dist_table(DEN_BLACK)
-DIST_TO_BLUE_DEN = _dist_table(DEN_BLUE)
+DIST_TO_BLACK_DEN = _dist_table(DEN_BLACK)   # distance to Black's den (Blue's target)
+DIST_TO_BLUE_DEN = _dist_table(DEN_BLUE)     # distance to Blue's den (Black's target)
+
 
 # ---------------------------------------------------------------------------
-# Versioning
+# Screen-aware logical sizing (pure functions so they can be unit-tested)
 # ---------------------------------------------------------------------------
 
-VERSION = "1.5"
+RESERVED_SCREEN_PX = 96   # title bar + taskbar + breathing room
 
-# ---------------------------------------------------------------------------
-# Custom pygame event IDs (registered at runtime)
-# ---------------------------------------------------------------------------
 
-# These are set in main.py after pygame.init()
-AI_MOVE_EVENT_TYPE: int = -1
+def compute_cell_size(screen_h: int, reserved: int = RESERVED_SCREEN_PX) -> int:
+    """Pick a cell size (clamped to [CELL_MIN, CELL_MAX]) so the board's logical
+    height fits within the usable screen height. The SCALED display then scales
+    this logical layout to fill whatever window/monitor it runs on."""
+    usable = max(screen_h - reserved, ROWS * CELL_MIN + 2 * BOARD_MARGIN)
+    raw = (usable - 2 * BOARD_MARGIN) // ROWS
+    return max(CELL_MIN, min(CELL_MAX, int(raw)))
+
+
+def layout_for_cell(cell: int) -> tuple[int, int]:
+    """Return the (window_width, window_height) implied by a cell size."""
+    width = COLS * cell + 2 * BOARD_MARGIN + PANEL_WIDTH
+    height = ROWS * cell + 2 * BOARD_MARGIN
+    return width, height

@@ -1,175 +1,129 @@
-"""Tests for GameState: undo/redo, turn tracking, copy."""
+"""Game state: initial layout, win/draw detection, and undo reversibility."""
 
-from engine.board import Board, Move
-from engine.game_state import GameState
-from engine.pieces import Animal, Color, make_piece_id
+import config
+from engine.game_state import DRAW, GameState
+from engine.move_generator import generate_moves
+from engine.pieces import Animal, Color
+
+BLUE = int(Color.BLUE)
+BLACK = int(Color.BLACK)
 
 
-# ---------------------------------------------------------------------------
-# Test: Undo move restores identical board state
-# ---------------------------------------------------------------------------
+def S(c, r):
+    return c * config.ROWS + r
 
-def test_undo_restores_state():
+
+def test_initial_layout_corners_and_counts():
     gs = GameState()
-    gs.new_game()
-
-    # Capture the initial hash
-    initial_hash = gs.board.hash
-    initial_turn = gs.turn
-
-    # Apply first move
-    move = gs.legal_moves()[0]
-    gs.apply_move(move)
-
-    assert gs.board.hash != initial_hash
-    assert gs.turn != initial_turn
-
-    # Undo
-    gs.undo_move()
-
-    assert gs.board.hash == initial_hash, "Hash should be restored after undo"
-    assert gs.turn == initial_turn, "Turn should be restored after undo"
+    assert gs.to_move == BLUE
+    assert gs.counts == [8, 8]
+    assert gs.piece_at(0, 0) == (Color.BLACK, Animal.LION)
+    assert gs.piece_at(6, 0) == (Color.BLACK, Animal.TIGER)
+    assert gs.piece_at(0, 8) == (Color.BLUE, Animal.TIGER)
+    assert gs.piece_at(6, 8) == (Color.BLUE, Animal.LION)
+    # Rat/Elephant on the rank nearest the river.
+    assert gs.piece_at(0, 2) == (Color.BLACK, Animal.RAT)
+    assert gs.piece_at(6, 2) == (Color.BLACK, Animal.ELEPHANT)
 
 
-def test_undo_restores_captured_piece():
-    """After undoing a capture, the captured piece is restored."""
+def test_initial_position_is_symmetric_move_count():
+    """Blue and Black have the same number of legal moves at the start."""
     gs = GameState()
-    gs.board = Board()
-    # Blue Wolf at (3,4), Black Cat at (3,3)
-    wolf_pid = make_piece_id(Color.BLUE, Animal.WOLF)
-    cat_pid = make_piece_id(Color.BLACK, Animal.CAT)
-    gs.board.place_piece(3, 4, wolf_pid)
-    gs.board.place_piece(3, 3, cat_pid)
-    gs.turn = Color.BLUE
-
-    move = Move(3, 4, 3, 3, cat_pid)
-    gs.apply_move(move)
-
-    assert gs.board.get(3, 3) == wolf_pid
-    assert cat_pid not in gs.board._piece_positions[int(Color.BLACK)]
-
-    gs.undo_move()
-
-    assert gs.board.get(3, 4) == wolf_pid, "Wolf should be back at source"
-    assert gs.board.get(3, 3) == cat_pid, "Cat should be restored"
-    assert cat_pid in gs.board._piece_positions[int(Color.BLACK)]
+    blue_moves = len(generate_moves(gs.board, BLUE))
+    black_moves = len(generate_moves(gs.board, BLACK))
+    assert blue_moves == black_moves
 
 
-# ---------------------------------------------------------------------------
-# Test: Turn alternates correctly
-# ---------------------------------------------------------------------------
-
-def test_starting_position_layout():
-    """Initial layout: Lion/Tiger fixed at corners; rows 1-2 / 6-7 are
-    top-to-bottom mirrors so each player's Elephant sits on their own left side
-    (Black Elephant col 6, Blue Elephant col 0)."""
-    from engine.pieces import (
-        Animal, Color, piece_id_color, piece_id_animal,
+def test_den_entry_wins():
+    gs = GameState()
+    gs.setup_position(
+        {(3, 1): (BLUE, Animal.RAT), (6, 6): (BLACK, Animal.WOLF)},
+        to_move=BLUE,
     )
-    expected = {
-        # Black (top)
-        (0, 0): (Color.BLACK, Animal.LION),
-        (6, 0): (Color.BLACK, Animal.TIGER),
-        (1, 1): (Color.BLACK, Animal.DOG),
-        (5, 1): (Color.BLACK, Animal.CAT),
-        (0, 2): (Color.BLACK, Animal.RAT),
-        (2, 2): (Color.BLACK, Animal.LEOPARD),
-        (4, 2): (Color.BLACK, Animal.WOLF),
-        (6, 2): (Color.BLACK, Animal.ELEPHANT),
-        # Blue (bottom)
-        (0, 6): (Color.BLUE, Animal.ELEPHANT),
-        (2, 6): (Color.BLUE, Animal.WOLF),
-        (4, 6): (Color.BLUE, Animal.LEOPARD),
-        (6, 6): (Color.BLUE, Animal.RAT),
-        (1, 7): (Color.BLUE, Animal.CAT),
-        (5, 7): (Color.BLUE, Animal.DOG),
-        (0, 8): (Color.BLUE, Animal.TIGER),
-        (6, 8): (Color.BLUE, Animal.LION),
-    }
+    move = next(m for m in gs.legal_moves() if m.to == S(3, 0))
+    gs.make_move(move)
+    assert gs.game_over
+    assert gs.winner() == Color.BLUE
+
+
+def test_capturing_last_piece_wins():
     gs = GameState()
-    gs.new_game()
-    for (c, r), (color, animal) in expected.items():
-        pid = gs.board.get(c, r)
-        assert pid != 0, f"({c},{r}) is empty; expected {color.name} {animal.name}"
-        assert piece_id_color(pid) == color and piece_id_animal(pid) == animal, (
-            f"({c},{r}) has wrong piece: got "
-            f"{piece_id_color(pid).name} {piece_id_animal(pid).name}, "
-            f"expected {color.name} {animal.name}"
-        )
-    # No extra pieces beyond the 16 expected
-    total = sum(1 for c in range(7) for r in range(9) if gs.board.get(c, r) != 0)
-    assert total == 16, f"expected 16 pieces, got {total}"
+    gs.setup_position(
+        {(0, 0): (BLUE, Animal.LION), (0, 1): (BLACK, Animal.CAT)},
+        to_move=BLUE,
+    )
+    move = next(m for m in gs.legal_moves() if m.to == S(0, 1))
+    gs.make_move(move)
+    assert gs.winner() == Color.BLUE
+    assert gs.counts[BLACK] == 0
 
 
-def test_turn_alternates():
+def test_stalemate_is_a_loss_for_side_to_move():
     gs = GameState()
-    gs.new_game()
-    assert gs.turn == Color.BLUE
+    # Black to move; after Dog (2,0)->(1,0) the lone Blue Rat at (0,0) is boxed
+    # in by two Black Dogs it cannot capture -> Blue has no move and loses.
+    gs.setup_position(
+        {(0, 0): (BLUE, Animal.RAT), (0, 1): (BLACK, Animal.DOG),
+         (2, 0): (BLACK, Animal.DOG)},
+        to_move=BLACK,
+    )
+    move = next(m for m in gs.legal_moves() if m.frm == S(2, 0) and m.to == S(1, 0))
+    gs.make_move(move)
+    assert gs.game_over
+    assert gs.winner() == Color.BLACK
 
-    move = gs.legal_moves()[0]
-    gs.apply_move(move)
-    assert gs.turn == Color.BLACK
 
-    move2 = gs.legal_moves()[0]
-    gs.apply_move(move2)
-    assert gs.turn == Color.BLUE
-
-
-# ---------------------------------------------------------------------------
-# Test: copy produces independent state
-# ---------------------------------------------------------------------------
-
-def test_copy_is_independent():
+def test_threefold_repetition_is_a_draw():
     gs = GameState()
-    gs.new_game()
+    gs.setup_position(
+        {(0, 0): (BLUE, Animal.LION), (6, 8): (BLACK, Animal.LION)},
+        to_move=BLUE,
+    )
+    # Shuffle both lions back and forth; the start position recurs every 4 plies.
+    cycle = [
+        (S(0, 0), S(0, 1)), (S(6, 8), S(6, 7)),
+        (S(0, 1), S(0, 0)), (S(6, 7), S(6, 8)),
+    ]
+    for _ in range(2):          # two full cycles -> position seen 3 times total
+        for frm, to in cycle:
+            if gs.game_over:
+                break
+            mv = next(m for m in gs.legal_moves() if m.frm == frm and m.to == to)
+            gs.make_move(mv)
+    assert gs.result == DRAW
 
-    gs2 = gs.copy()
 
-    # Modify original
-    move = gs.legal_moves()[0]
-    gs.apply_move(move)
-
-    # Copy should be unchanged
-    assert gs2.board.hash != gs.board.hash
-    assert gs2.turn == Color.BLUE
-    assert len(gs2.history) == 0
-
-
-# ---------------------------------------------------------------------------
-# Test: Zobrist hashes differ for different positions
-# ---------------------------------------------------------------------------
-
-def test_zobrist_different_positions():
+def test_no_capture_limit_is_a_draw():
     gs = GameState()
-    gs.new_game()
+    gs.setup_position(
+        {(0, 0): (BLUE, Animal.LION), (6, 8): (BLACK, Animal.LION)},
+        to_move=BLUE,
+    )
+    gs.halfmove_clock = 99     # one ply short of the no-capture limit
+    mv = next(m for m in gs.legal_moves() if m.frm == S(0, 0))
+    gs.make_move(mv)            # 100th no-capture ply
+    assert gs.result == DRAW
 
-    hashes = set()
-    for move in gs.legal_moves()[:10]:
-        gs.apply_move(move)
-        hashes.add(gs.board.hash)
+
+def test_undo_restores_state_exactly():
+    gs = GameState()
+    before_sq = gs.board.sq[:]
+    before_hash = gs.hash
+    before_counts = gs.counts[:]
+
+    # Play a handful of legal moves then undo them all.
+    played = 0
+    for _ in range(6):
+        moves = gs.legal_moves()
+        if not moves:
+            break
+        gs.make_move(moves[len(moves) // 2])
+        played += 1
+    for _ in range(played):
         gs.undo_move()
 
-    assert len(hashes) == len(gs.legal_moves()[:10]), "Different positions should have different hashes"
-
-
-# ---------------------------------------------------------------------------
-# Test: Multiple undos work correctly
-# ---------------------------------------------------------------------------
-
-def test_multiple_undos():
-    gs = GameState()
-    gs.new_game()
-    initial_hash = gs.board.hash
-
-    moves_applied = []
-    for _ in range(6):
-        move = gs.legal_moves()[0]
-        gs.apply_move(move)
-        moves_applied.append(move)
-
-    for _ in range(6):
-        gs.undo_move()
-
-    assert gs.board.hash == initial_hash
-    assert gs.turn == Color.BLUE
-    assert len(gs.history) == 0
+    assert gs.board.sq == before_sq
+    assert gs.hash == before_hash
+    assert gs.counts == before_counts
+    assert gs.to_move == BLUE
+    assert gs.result is None

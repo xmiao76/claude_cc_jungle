@@ -1,0 +1,24 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]  # long lines are handled case-by-case
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+# Measure only our own core; display/audio-dependent and one-shot modules are
+# validated by rendering smoke tests and by running the packaged .exe.
+include = ["ai/*.py", "engine/*.py", "gui/*.py", "config.py"]
+omit = [
+    "gui/renderer.py",
+    "gui/audio.py",
+    "gui/fonts.py",
+]
+
+[tool.coverage.report]
+show_missing = true

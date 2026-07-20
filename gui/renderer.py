@@ -1,669 +1,384 @@
-"""Board and piece rendering for Jungle.
+"""All drawing for the game: board, terrain, pieces, side panel, main menu, and
+overlays. The renderer draws to a fixed logical surface; the SCALED display
+scales that surface to the actual window, so nothing here depends on the real
+window size.
 
-Phase 1: Colored rectangle terrain + text piece labels (placeholder visuals).
-Phase 2: Replaced with sprite artwork.
+Board *flip* is a pure display transform: ``self.flipped`` only changes where a
+``(col, row)`` is drawn (and where a click maps back to), never the game state.
 """
 
 from __future__ import annotations
 
-import math
 import os
 
 import pygame
 
-import config as _config  # imported as module so _config.CELL_SIZE etc. are read dynamically
-from config import (
-    COLS, ROWS, BOARD_OFFSET_X, BOARD_OFFSET_Y,
-    TERRAIN_LAND, TERRAIN_RIVER, TERRAIN_TRAP, TERRAIN_DEN,
-    TERRAIN,
-    COLOR_LAND, COLOR_RIVER, COLOR_TRAP, COLOR_DEN, COLOR_GRID,
-    COLOR_HIGHLIGHT_SELECT, COLOR_BLUE_PIECE, COLOR_BLACK_PIECE, COLOR_TEXT_LIGHT, COLOR_PANEL_BG, COLOR_BG,
-    PANEL_WIDTH, CAPTURE_FLASH_MS,
-    asset_path,
-)
-from engine.pieces import Animal, Color, piece_id_color, piece_id_animal
-from gui.fonts import safe_sysfont
+import config
+from engine.pieces import ANIMAL_NAME, Animal, Color, code_animal, code_color
+from gui import fonts
 
-# Terrain background colors
-_TERRAIN_COLOR = {
-    TERRAIN_LAND: COLOR_LAND,
-    TERRAIN_RIVER: COLOR_RIVER,
-    TERRAIN_TRAP: COLOR_TRAP,
-    TERRAIN_DEN: COLOR_DEN,
-}
-
-# Short labels drawn on every piece so the animal is always identifiable
-_PIECE_LABEL = {
-    Animal.RAT:      "Rat",
-    Animal.CAT:      "Cat",
-    Animal.DOG:      "Dog",
-    Animal.WOLF:     "Wolf",
-    Animal.LEOPARD:  "Leo",
-    Animal.TIGER:    "Tig",
-    Animal.LION:     "Lion",
-    Animal.ELEPHANT: "Ele",
-}
-
-# Abbreviations kept for the fallback placeholder circle (no sprite)
-_ABBREV = {
-    Animal.RAT: "Ra", Animal.CAT: "Ca", Animal.DOG: "Do",
-    Animal.WOLF: "Wo", Animal.LEOPARD: "Le", Animal.TIGER: "Ti",
-    Animal.LION: "Li", Animal.ELEPHANT: "El",
-}
+COLS = config.COLS
+ROWS = config.ROWS
 
 
 class Renderer:
-    """Draws all game visuals onto a pygame Surface."""
-
     def __init__(self, surface: pygame.Surface) -> None:
         self.surface = surface
-        self._font_piece = safe_sysfont("segoeui", 16, bold=True)
-        self._font_label = safe_sysfont("segoeui", 13)
-        self._font_status = safe_sysfont("segoeui", 18, bold=True)
-        self._font_big = safe_sysfont("segoeui", 36, bold=True)
-        self._font_small = safe_sysfont("segoeui", 14)
+        self.flipped = False
+        self._layout()
+        self._load_assets()
+        # Button rects, refreshed each frame they are drawn (logical coords).
+        self.buttons: dict[str, pygame.Rect] = {}
+        self.menu_buttons: dict[str, pygame.Rect] = {}
+        self.over_buttons: dict[str, pygame.Rect] = {}
 
-        # Sprite cache: dict of (animal, color) -> pygame.Surface | None
-        self._sprites: dict[tuple[Animal, Color], pygame.Surface | None] = {}
-        self._sprites_loaded = False
+    # -- layout -------------------------------------------------------------
 
-        # Terrain tile cache
-        self._tile_cache: dict[int, pygame.Surface | None] = {}
-        self._tiles_loaded = False
+    def _layout(self) -> None:
+        self.cell = config.CELL_SIZE
+        self.ox = config.BOARD_MARGIN
+        self.oy = config.BOARD_MARGIN
+        self.board_w = COLS * self.cell
+        self.board_h = ROWS * self.cell
+        self.panel_x = self.ox + self.board_w + config.BOARD_MARGIN
+        self.panel_w = config.WINDOW_WIDTH - self.panel_x - config.BOARD_MARGIN // 2
+        self.W = config.WINDOW_WIDTH
+        self.H = config.WINDOW_HEIGHT
 
-        # Capture flash: dict of (col, row) -> end_time_ms
-        self._flashes: dict[tuple[int, int], int] = {}
-
-        # AI thinking spinner state
-        self._spinner_angle = 0.0
-
-        # In-flight piece animations: list of dicts
-        # {animal, color, fc, fr, tc, tr, start_ms, duration_ms}
-        self._animations: list[dict] = []
-
-        # Last computed UI rects (for hit-testing in controller)
-        self.undo_button_rect: pygame.Rect | None = None
-        self.mute_button_rect: pygame.Rect | None = None
-        self.flip_button_rect: pygame.Rect | None = None
-
-        # Display orientation (toggled by controller)
-        self.flipped: bool = False
-
-    # ------------------------------------------------------------------
-    # Coordinate helpers (apply board flip)
-    # ------------------------------------------------------------------
-
-    def _vcol(self, c: int) -> int:
-        return COLS - 1 - c if self.flipped else c
-
-    def _vrow(self, r: int) -> int:
-        return ROWS - 1 - r if self.flipped else r
-
-    def _cell_rect(self, col: int, row: int) -> pygame.Rect:
-        x = BOARD_OFFSET_X + self._vcol(col) * _config.CELL_SIZE
-        y = BOARD_OFFSET_Y + self._vrow(row) * _config.CELL_SIZE
-        return pygame.Rect(x, y, _config.CELL_SIZE, _config.CELL_SIZE)
-
-    def _pixel_center(self, col: int, row: int) -> tuple[int, int]:
-        r = self._cell_rect(col, row)
-        return r.centerx, r.centery
-
-    # ------------------------------------------------------------------
-    # Asset loading (called once after pygame.display is set)
-    # ------------------------------------------------------------------
-
-    def load_assets(self) -> None:
-        """Attempt to load sprite and tile assets. Falls back to placeholder if missing."""
-        self._load_tiles()
-        self._load_sprites()
-
-    def _load_tiles(self) -> None:
-        tile_names = {
-            TERRAIN_LAND: "land.png",
-            TERRAIN_RIVER: "river.png",
-            TERRAIN_TRAP: "trap.png",
-            TERRAIN_DEN: "den.png",
-        }
-        for terrain_id, filename in tile_names.items():
-            path = asset_path(os.path.join("gui", "assets", "tiles", filename))
-            if os.path.exists(path):
-                try:
-                    img = pygame.image.load(path).convert_alpha()
-                    self._tile_cache[terrain_id] = pygame.transform.smoothscale(
-                        img, (_config.CELL_SIZE, _config.CELL_SIZE)
-                    )
-                except Exception:
-                    self._tile_cache[terrain_id] = None
-            else:
-                self._tile_cache[terrain_id] = None
-
-    def _load_sprites(self) -> None:
-        color_names = {Color.BLUE: "blue", Color.BLACK: "black"}
+    def _load_assets(self) -> None:
+        sprite_px = int(self.cell * 0.9)
+        self.sprites: dict[tuple[int, int], pygame.Surface] = {}
         for animal in Animal:
-            for color in Color:
-                fname = f"{animal.name.lower()}_{color_names[color]}.png"
-                path = asset_path(os.path.join("gui", "assets", "pieces", fname))
-                if os.path.exists(path):
-                    try:
-                        img = pygame.image.load(path).convert_alpha()
-                        size = int(_config.CELL_SIZE * 0.78)
-                        self._sprites[(animal, color)] = pygame.transform.smoothscale(
-                            img, (size, size)
-                        )
-                    except Exception:
-                        self._sprites[(animal, color)] = None
-                else:
-                    self._sprites[(animal, color)] = None
+            for color, owner in ((int(Color.BLUE), "blue"), (int(Color.BLACK), "black")):
+                path = config.asset_path(
+                    os.path.join("gui", "assets", "pieces", f"{ANIMAL_NAME[animal]}_{owner}.png"))
+                img = pygame.image.load(path).convert_alpha()
+                self.sprites[(int(animal), color)] = pygame.transform.smoothscale(
+                    img, (sprite_px, sprite_px))
 
-    # ------------------------------------------------------------------
-    # Main draw entry point
-    # ------------------------------------------------------------------
+        self.tiles: dict[str, pygame.Surface] = {}
+        for name in ("land", "river", "trap", "den_blue", "den_black"):
+            path = config.asset_path(os.path.join("gui", "assets", "tiles", f"{name}.png"))
+            try:
+                img = pygame.image.load(path).convert()
+                self.tiles[name] = pygame.transform.smoothscale(img, (self.cell, self.cell))
+            except Exception:
+                self.tiles[name] = None
 
-    def draw(
-        self,
-        state,
-        selected: tuple[int, int] | None,
-        legal_targets: set[tuple[int, int]],
-        ai_thinking: bool,
-        tick_ms: int,
-        undo_enabled: bool = False,
-        muted: bool = False,
-    ) -> None:
-        """Redraw the entire frame."""
-        self.surface.fill(COLOR_BG)
-        self._draw_board_terrain()
-        self._draw_highlights(selected, legal_targets)
-        self._draw_capture_flashes(tick_ms)
-        animating_squares = {(a["fc"], a["fr"]) for a in self._animations}
-        self._draw_pieces(state.board, selected, skip=animating_squares)
-        self._draw_animations(tick_ms)
+    # -- coordinate mapping (applies flip) ----------------------------------
+
+    def cell_topleft(self, col: int, row: int) -> tuple[int, int]:
+        dcol = COLS - 1 - col if self.flipped else col
+        drow = ROWS - 1 - row if self.flipped else row
+        return self.ox + dcol * self.cell, self.oy + drow * self.cell
+
+    def cell_center(self, col: int, row: int) -> tuple[int, int]:
+        x, y = self.cell_topleft(col, row)
+        return x + self.cell // 2, y + self.cell // 2
+
+    # -- top-level frames ---------------------------------------------------
+
+    def draw_game(self, gs, *, selected, target_squares, last_move, human_color,
+                  ai_thinking, tick_ms, capture_flash, anim, difficulty,
+                  mode_ava, muted, move_number) -> None:
+        self.surface.fill(config.COLOR_BG)
+        self._draw_terrain()
+        self._draw_last_move(last_move)
+        self._draw_selection(selected, target_squares, gs)
+        self._draw_pieces(gs, anim)
+        self._draw_capture_flash(capture_flash, tick_ms)
         self._draw_grid()
-        self._draw_board_labels()
-        self._draw_panel(state, ai_thinking, tick_ms, undo_enabled, muted, self.flipped)
+        self._draw_panel(gs, human_color=human_color, ai_thinking=ai_thinking,
+                         difficulty=difficulty, mode_ava=mode_ava, muted=muted,
+                         move_number=move_number, tick_ms=tick_ms)
 
-    # ------------------------------------------------------------------
-    # Board terrain
-    # ------------------------------------------------------------------
+    # -- board layers -------------------------------------------------------
 
-    def _draw_board_terrain(self) -> None:
-        for c in range(COLS):
-            for r in range(ROWS):
-                terrain = TERRAIN[c][r]
-                rect = self._cell_rect(c, r)
-                tile = self._tile_cache.get(terrain)
-                if tile:
-                    self.surface.blit(tile, rect)
+    def _draw_terrain(self) -> None:
+        surf = self.surface
+        for col in range(COLS):
+            for row in range(ROWS):
+                x, y = self.cell_topleft(col, row)
+                terr = config.TERRAIN[col][row]
+                tile = None
+                if terr == config.TERRAIN_RIVER:
+                    tile = self.tiles.get("river")
+                elif terr == config.TERRAIN_TRAP:
+                    tile = self.tiles.get("trap")
+                elif terr == config.TERRAIN_DEN:
+                    owner = "black" if (col, row) == config.DEN_BLACK else "blue"
+                    tile = self.tiles.get(f"den_{owner}")
                 else:
-                    color = _TERRAIN_COLOR[terrain]
-                    pygame.draw.rect(self.surface, color, rect)
-
-                    # Extra visual cues for placeholder mode
-                    if terrain == TERRAIN_DEN:
-                        # Draw crown symbol
-                        center = rect.center
-                        pygame.draw.circle(self.surface, (255, 220, 0), center, _config.CELL_SIZE // 3, 3)
-                    elif terrain == TERRAIN_TRAP:
-                        # Draw X
-                        m = 8
-                        pygame.draw.line(self.surface, (120, 60, 0),
-                                         (rect.x + m, rect.y + m),
-                                         (rect.right - m, rect.bottom - m), 2)
-                        pygame.draw.line(self.surface, (120, 60, 0),
-                                         (rect.right - m, rect.y + m),
-                                         (rect.x + m, rect.bottom - m), 2)
+                    tile = self.tiles.get("land")
+                if tile is not None:
+                    surf.blit(tile, (x, y))
+                    if terr == config.TERRAIN_LAND and (col + row) % 2:
+                        shade = pygame.Surface((self.cell, self.cell), pygame.SRCALPHA)
+                        shade.fill((0, 0, 0, 22))
+                        surf.blit(shade, (x, y))
+                else:  # procedural fallback
+                    color = {
+                        config.TERRAIN_RIVER: config.COLOR_RIVER,
+                        config.TERRAIN_TRAP: config.COLOR_TRAP,
+                        config.TERRAIN_DEN: config.COLOR_DEN_BLUE,
+                    }.get(terr, config.COLOR_LAND if (col + row) % 2 else config.COLOR_LAND_ALT)
+                    pygame.draw.rect(surf, color, (x, y, self.cell, self.cell))
 
     def _draw_grid(self) -> None:
-        for c in range(COLS + 1):
-            x = BOARD_OFFSET_X + c * _config.CELL_SIZE
-            pygame.draw.line(self.surface, COLOR_GRID,
-                             (x, BOARD_OFFSET_Y),
-                             (x, BOARD_OFFSET_Y + ROWS * _config.CELL_SIZE), 1)
-        for r in range(ROWS + 1):
-            y = BOARD_OFFSET_Y + r * _config.CELL_SIZE
-            pygame.draw.line(self.surface, COLOR_GRID,
-                             (BOARD_OFFSET_X, y),
-                             (BOARD_OFFSET_X + COLS * _config.CELL_SIZE, y), 1)
+        surf = self.surface
+        for col in range(COLS + 1):
+            x = self.ox + col * self.cell
+            pygame.draw.line(surf, config.COLOR_GRID, (x, self.oy), (x, self.oy + self.board_h), 1)
+        for row in range(ROWS + 1):
+            y = self.oy + row * self.cell
+            pygame.draw.line(surf, config.COLOR_GRID, (self.ox, y), (self.ox + self.board_w, y), 1)
+        pygame.draw.rect(surf, (18, 22, 18),
+                         (self.ox, self.oy, self.board_w, self.board_h), 3)
 
-    def _draw_board_labels(self) -> None:
-        # Column labels A-G follow the visual column so the on-screen label
-        # matches what the move history says (e.g. D9 is always Blue's den).
-        for c in range(COLS):
-            label = chr(ord('A') + c)
-            surf = self._font_label.render(label, True, (180, 180, 180))
-            x = BOARD_OFFSET_X + self._vcol(c) * _config.CELL_SIZE + _config.CELL_SIZE // 2 - surf.get_width() // 2
-            y = BOARD_OFFSET_Y + ROWS * _config.CELL_SIZE + 4
-            self.surface.blit(surf, (x, y))
-        # Row labels 1-9
-        for r in range(ROWS):
-            label = str(r + 1)
-            surf = self._font_label.render(label, True, (180, 180, 180))
-            x = BOARD_OFFSET_X - surf.get_width() - 4
-            y = BOARD_OFFSET_Y + self._vrow(r) * _config.CELL_SIZE + _config.CELL_SIZE // 2 - surf.get_height() // 2
-            self.surface.blit(surf, (x, y))
+    def _draw_last_move(self, last_move) -> None:
+        if last_move is None:
+            return
+        for sq in (last_move.frm, last_move.to):
+            x, y = self.cell_topleft(sq // ROWS, sq % ROWS)
+            s = pygame.Surface((self.cell, self.cell), pygame.SRCALPHA)
+            s.fill((*config.COLOR_HIGHLIGHT_LAST, 90))
+            self.surface.blit(s, (x, y))
 
-    # ------------------------------------------------------------------
-    # Highlights
-    # ------------------------------------------------------------------
+    def _draw_selection(self, selected, target_squares, gs) -> None:
+        if selected is not None:
+            x, y = self.cell_topleft(*selected)
+            pygame.draw.rect(self.surface, config.COLOR_HIGHLIGHT_SELECT,
+                             (x, y, self.cell, self.cell), max(3, self.cell // 18))
+        if target_squares:
+            for sq in target_squares:
+                col, row = sq // ROWS, sq % ROWS
+                cx, cy = self.cell_center(col, row)
+                occupied = gs.board.sq[sq] != 0
+                if occupied:  # capture target: ring
+                    pygame.draw.circle(self.surface, config.COLOR_HIGHLIGHT_MOVE,
+                                       (cx, cy), self.cell // 2 - 3, max(3, self.cell // 20))
+                else:
+                    dot = pygame.Surface((self.cell, self.cell), pygame.SRCALPHA)
+                    pygame.draw.circle(dot, (*config.COLOR_HIGHLIGHT_MOVE, 190),
+                                       (self.cell // 2, self.cell // 2), self.cell // 7)
+                    self.surface.blit(dot, (self.cell_topleft(col, row)))
 
-    def _draw_highlights(
-        self,
-        selected: tuple[int, int] | None,
-        legal_targets: set[tuple[int, int]],
-    ) -> None:
-        # Selected piece: gold border
-        if selected:
-            rect = self._cell_rect(*selected)
-            pygame.draw.rect(self.surface, COLOR_HIGHLIGHT_SELECT, rect, 4)
-
-        # Legal move targets: semi-transparent green circle
-        for (c, r) in legal_targets:
-            dot_surf = pygame.Surface((_config.CELL_SIZE, _config.CELL_SIZE), pygame.SRCALPHA)
-            pygame.draw.circle(dot_surf, (100, 230, 100, 120), (_config.CELL_SIZE // 2, _config.CELL_SIZE // 2),
-                               _config.CELL_SIZE // 4)
-            self.surface.blit(dot_surf, self._cell_rect(c, r))
-
-    # ------------------------------------------------------------------
-    # Capture flash
-    # ------------------------------------------------------------------
-
-    def trigger_capture_flash(self, col: int, row: int, tick_ms: int) -> None:
-        self._flashes[(col, row)] = tick_ms + CAPTURE_FLASH_MS
-
-    def _draw_capture_flashes(self, tick_ms: int) -> None:
-        expired = []
-        for (c, r), end_ms in self._flashes.items():
-            if tick_ms < end_ms:
-                rect = self._cell_rect(c, r)
-                flash_surf = pygame.Surface((_config.CELL_SIZE, _config.CELL_SIZE), pygame.SRCALPHA)
-                alpha = int(180 * (end_ms - tick_ms) / CAPTURE_FLASH_MS)
-                flash_surf.fill((220, 50, 50, alpha))
-                self.surface.blit(flash_surf, rect)
-            else:
-                expired.append((c, r))
-        for k in expired:
-            del self._flashes[k]
-
-    # ------------------------------------------------------------------
-    # Pieces
-    # ------------------------------------------------------------------
-
-    def _draw_pieces(
-        self,
-        board,
-        selected: tuple[int, int] | None,
-        skip: set[tuple[int, int]] | None = None,
-    ) -> None:
-        skip = skip or set()
-        for c in range(COLS):
-            for r in range(ROWS):
-                if (c, r) in skip:
-                    continue
-                pid = board.get(c, r)
-                if pid == 0:
-                    continue
-                color = piece_id_color(pid)
-                animal = piece_id_animal(pid)
-                self._draw_piece(c, r, color, animal, selected == (c, r))
-
-    def _draw_outlined_text(
-        self,
-        text: str,
-        font: pygame.font.Font,
-        cx: int,
-        cy: int,
-        fg: tuple,
-        outline: tuple,
-        outline_width: int = 1,
-    ) -> None:
-        """Draw text centered at (cx, cy) with a solid outline for readability."""
-        for dx in range(-outline_width, outline_width + 1):
-            for dy in range(-outline_width, outline_width + 1):
-                if dx == 0 and dy == 0:
-                    continue
-                s = font.render(text, True, outline)
-                self.surface.blit(s, (cx - s.get_width() // 2 + dx,
-                                      cy - s.get_height() // 2 + dy))
-        s = font.render(text, True, fg)
-        self.surface.blit(s, (cx - s.get_width() // 2, cy - s.get_height() // 2))
-
-    def _draw_piece(
-        self,
-        col: int, row: int,
-        color: Color, animal: Animal,
-        is_selected: bool,
-    ) -> None:
-        rect = self._cell_rect(col, row)
-        cx, cy = rect.centerx, rect.centery
-        sprite = self._sprites.get((animal, color))
-
-        if sprite:
-            x = cx - sprite.get_width() // 2
-            y = cy - sprite.get_height() // 2
-            self.surface.blit(sprite, (x, y))
-        else:
-            # Placeholder: colored circle with abbreviated name
-            piece_color = COLOR_BLUE_PIECE if color == Color.BLUE else COLOR_BLACK_PIECE
-            radius = _config.CELL_SIZE // 2 - 6
-            pygame.draw.circle(self.surface, piece_color, (cx, cy), radius)
-            pygame.draw.circle(self.surface, (200, 200, 200), (cx, cy), radius, 2)
-
-            abbrev = _ABBREV[animal]
-            surf = self._font_piece.render(abbrev, True, COLOR_TEXT_LIGHT)
-            self.surface.blit(surf, (cx - surf.get_width() // 2, cy - surf.get_height() // 2))
-
-        # --- Animal name label at bottom of cell ---
-        # White text with dark outline so it reads on any terrain/piece color.
-        label = _PIECE_LABEL[animal]
-        label_y = rect.bottom - self._font_label.get_height() - 1
-        self._draw_outlined_text(
-            label, self._font_label,
-            cx, label_y,
-            fg=(255, 255, 255),
-            outline=(0, 0, 0),
-            outline_width=1,
-        )
-
-        # Rank badge: small circle in top-left with number
-        rank = int(animal)
-        badge_x = rect.x + 3
-        badge_y = rect.y + 3
-        badge_r = 8
-        badge_color = (60, 120, 220) if color == Color.BLUE else (50, 50, 60)
-        pygame.draw.circle(self.surface, badge_color, (badge_x + badge_r, badge_y + badge_r), badge_r)
-        pygame.draw.circle(self.surface, (200, 200, 200), (badge_x + badge_r, badge_y + badge_r), badge_r, 1)
-        rank_surf = self._font_small.render(str(rank), True, (255, 255, 255))
-        self.surface.blit(rank_surf, (badge_x + badge_r - rank_surf.get_width() // 2,
-                                      badge_y + badge_r - rank_surf.get_height() // 2))
-
-    # ------------------------------------------------------------------
-    # Animations
-    # ------------------------------------------------------------------
-
-    ANIM_DURATION_MS = 220
-
-    def start_move_animation(
-        self,
-        animal: Animal, color: Color,
-        fc: int, fr: int, tc: int, tr: int,
-        tick_ms: int,
-    ) -> None:
-        self._animations.append({
-            "animal": animal, "color": color,
-            "fc": fc, "fr": fr, "tc": tc, "tr": tr,
-            "start_ms": tick_ms, "duration_ms": self.ANIM_DURATION_MS,
-        })
-
-    def has_active_animation(self, tick_ms: int) -> bool:
-        return any(tick_ms < a["start_ms"] + a["duration_ms"] for a in self._animations)
-
-    def _draw_animations(self, tick_ms: int) -> None:
-        active: list[dict] = []
-        for a in self._animations:
-            elapsed = tick_ms - a["start_ms"]
-            if elapsed >= a["duration_ms"]:
+    def _draw_pieces(self, gs, anim) -> None:
+        skip_sq = anim["dst"] if anim else -1
+        for sq, code in enumerate(gs.board.sq):
+            if code == 0 or sq == skip_sq:
                 continue
-            t = elapsed / a["duration_ms"]
-            t = 1 - (1 - t) * (1 - t)   # easeOutQuad
-            fx, fy = self._pixel_center(a["fc"], a["fr"])
-            tx, ty = self._pixel_center(a["tc"], a["tr"])
-            cx = int(fx + (tx - fx) * t)
-            cy = int(fy + (ty - fy) * t)
-            self._draw_floating_piece(cx, cy, a["color"], a["animal"])
-            active.append(a)
-        self._animations = active
+            self._blit_piece(code, *self.cell_topleft(sq // ROWS, sq % ROWS))
+        if anim:
+            self._blit_piece(anim["code"], anim["x"], anim["y"])
 
-    def _draw_floating_piece(self, cx: int, cy: int, color: Color, animal: Animal) -> None:
-        sprite = self._sprites.get((animal, color))
-        if sprite:
-            self.surface.blit(sprite, (cx - sprite.get_width() // 2,
-                                       cy - sprite.get_height() // 2))
+    def _blit_piece(self, code: int, x: int, y: int) -> None:
+        sprite = self.sprites[(code_animal(code), code_color(code))]
+        off = (self.cell - sprite.get_width()) // 2
+        self.surface.blit(sprite, (x + off, y + off))
+
+    def _draw_capture_flash(self, capture_flash, tick_ms) -> None:
+        if not capture_flash:
+            return
+        sq, start = capture_flash
+        frac = (tick_ms - start) / config.CAPTURE_FLASH_MS
+        if frac < 0 or frac > 1:
+            return
+        x, y = self.cell_topleft(sq // ROWS, sq % ROWS)
+        s = pygame.Surface((self.cell, self.cell), pygame.SRCALPHA)
+        s.fill((*config.COLOR_CAPTURE_FLASH, int(180 * (1 - frac))))
+        self.surface.blit(s, (x, y))
+
+    # -- side panel ---------------------------------------------------------
+
+    def _draw_panel(self, gs, *, human_color, ai_thinking, difficulty, mode_ava,
+                    muted, move_number, tick_ms) -> None:
+        surf = self.surface
+        px = self.panel_x
+        pw = self.panel_w
+        pygame.draw.rect(surf, config.COLOR_PANEL_BG, (px, 0, self.W - px, self.H))
+        pad = px + 16
+        y = 22
+
+        title = fonts.get(int(self.cell * 0.42), bold=True)
+        surf.blit(title.render("JUNGLE", True, config.COLOR_TEXT_LIGHT), (pad, y))
+        y += int(self.cell * 0.5)
+        sub = fonts.get(int(self.cell * 0.2))
+        surf.blit(sub.render("Dou Shou Qi", True, config.COLOR_TEXT_MUTED), (pad, y))
+        y += int(self.cell * 0.5)
+
+        # Turn indicator
+        f = fonts.get(int(self.cell * 0.24), bold=True)
+        turn_col = config.COLOR_BLUE_PIECE if gs.to_move == int(Color.BLUE) else config.COLOR_BLACK_PIECE
+        turn_name = "Blue" if gs.to_move == int(Color.BLUE) else "Black"
+        line = f.render(f"{turn_name} to move", True, config.COLOR_TEXT_LIGHT)
+        pygame.draw.circle(surf, turn_col, (pad + 9, y + line.get_height() // 2),
+                           max(7, int(self.cell * 0.1)))
+        surf.blit(line, (pad + 26, y))
+        y += line.get_height() + 4
+        if not mode_ava:
+            tag = "Your move" if gs.to_move == human_color else "AI opponent"
+            small = fonts.get(int(self.cell * 0.19))
+            surf.blit(small.render(tag, True, config.COLOR_TEXT_MUTED), (pad + 26, y))
+            y += int(self.cell * 0.3)
         else:
-            piece_color = COLOR_BLUE_PIECE if color == Color.BLUE else COLOR_BLACK_PIECE
-            radius = _config.CELL_SIZE // 2 - 6
-            pygame.draw.circle(self.surface, piece_color, (cx, cy), radius)
-            pygame.draw.circle(self.surface, (200, 200, 200), (cx, cy), radius, 2)
-            abbrev = _ABBREV[animal]
-            surf = self._font_piece.render(abbrev, True, COLOR_TEXT_LIGHT)
-            self.surface.blit(surf, (cx - surf.get_width() // 2, cy - surf.get_height() // 2))
+            y += int(self.cell * 0.06)
 
-    # ------------------------------------------------------------------
-    # Side panel
-    # ------------------------------------------------------------------
-
-    def _draw_panel(
-        self,
-        state,
-        ai_thinking: bool,
-        tick_ms: int,
-        undo_enabled: bool = False,
-        muted: bool = False,
-        flipped: bool = False,
-    ) -> None:
-        panel_x = BOARD_OFFSET_X + COLS * _config.CELL_SIZE + 20
-        panel_rect = pygame.Rect(panel_x, 0, PANEL_WIDTH, _config.WINDOW_HEIGHT)
-        pygame.draw.rect(self.surface, COLOR_PANEL_BG, panel_rect)
-
-        y = 30
-        # Title
-        title = self._font_status.render("JUNGLE", True, (220, 180, 60))
-        self.surface.blit(title, (panel_x + 10, y))
-        y += 50
-
-        # Current turn
-        if not state.is_terminal():
-            turn_color = "Blue" if state.turn == Color.BLUE else "Black"
-            turn_surf = self._font_status.render(f"{turn_color}'s turn", True, COLOR_TEXT_LIGHT)
-            self.surface.blit(turn_surf, (panel_x + 10, y))
-            y += 40
-
-            if ai_thinking:
-                self._draw_spinner(panel_x + 10, y, tick_ms)
-                think_surf = self._font_small.render("AI thinking...", True, (160, 160, 160))
-                self.surface.blit(think_surf, (panel_x + 40, y + 8))
-                y += 40
-        else:
-            winner = state.get_winner()
-            if winner is not None:
-                wname = "Blue" if winner == Color.BLUE else "Black"
-                win_surf = self._font_big.render(f"{wname} wins!", True, (255, 215, 0))
-                self.surface.blit(win_surf, (panel_x + 10, y))
-            y += 60
-
-        y += 20
         # Piece counts
-        blue_count = state.board.alive_count(Color.BLUE)
-        black_count = state.board.alive_count(Color.BLACK)
-        bc_surf = self._font_small.render(f"Blue pieces: {blue_count}", True, (100, 160, 255))
-        bkc_surf = self._font_small.render(f"Black pieces: {black_count}", True, (160, 160, 160))
-        self.surface.blit(bc_surf, (panel_x + 10, y))
-        y += 22
-        self.surface.blit(bkc_surf, (panel_x + 10, y))
-        y += 40
+        cf = fonts.get(int(self.cell * 0.22))
+        surf.blit(cf.render(f"Blue pieces:  {gs.counts[int(Color.BLUE)]}", True,
+                            config.COLOR_TEXT_LIGHT), (pad, y))
+        y += int(self.cell * 0.3)
+        surf.blit(cf.render(f"Black pieces: {gs.counts[int(Color.BLACK)]}", True,
+                            config.COLOR_TEXT_LIGHT), (pad, y))
+        y += int(self.cell * 0.3)
+        surf.blit(cf.render(f"Move {move_number}", True, config.COLOR_TEXT_MUTED), (pad, y))
+        y += int(self.cell * 0.36)
 
-        # Move count
-        moves_surf = self._font_small.render(f"Move #{len(state.history)}", True, (140, 140, 140))
-        self.surface.blit(moves_surf, (panel_x + 10, y))
-        y += 30
+        mode = "AI vs AI" if mode_ava else "Human vs AI"
+        surf.blit(cf.render(f"Mode: {mode}", True, config.COLOR_TEXT_MUTED), (pad, y))
+        y += int(self.cell * 0.28)
+        surf.blit(cf.render(f"Difficulty: {config.DIFFICULTY_LABELS[difficulty]}", True,
+                            config.COLOR_TEXT_MUTED), (pad, y))
+        y += int(self.cell * 0.36)
 
-        # --- Move history (last 8) ---
-        hist_title = self._font_small.render("History:", True, (200, 200, 200))
-        self.surface.blit(hist_title, (panel_x + 10, y))
-        y += 20
-        try:
-            entries = state.formatted_history(8)
-        except Exception:
-            entries = []
-        for line in entries:
-            surf = self._font_small.render(line, True, (170, 170, 170))
-            self.surface.blit(surf, (panel_x + 10, y))
-            y += 17
+        # AI thinking spinner
+        if ai_thinking:
+            self._spinner(pad + 12, y + 12, tick_ms)
+            surf.blit(cf.render("AI thinking...", True, config.COLOR_HIGHLIGHT_SELECT),
+                      (pad + 30, y))
+        y += int(self.cell * 0.5)
 
-        # --- Buttons at bottom of panel ---
-        btn_y = _config.WINDOW_HEIGHT - 130
+        # Buttons at the bottom
+        bh = max(30, int(self.cell * 0.42))
+        gap = int(bh * 0.28)
+        bx = pad - 4
+        bw = pw - 12
+        by = self.H - (bh + gap) * 3 - 32
+        self.buttons = {}
+        self.buttons["flip"] = self._button(
+            pygame.Rect(bx, by, bw, bh), "Flip board: " + ("On (F)" if self.flipped else "Off (F)"))
+        self.buttons["undo"] = self._button(
+            pygame.Rect(bx, by + bh + gap, bw, bh), "Undo (U)")
+        self.buttons["mute"] = self._button(
+            pygame.Rect(bx, by + 2 * (bh + gap), bw, bh),
+            "Sound: " + ("Off (M)" if muted else "On (M)"))
 
-        flip_rect = pygame.Rect(panel_x + 10, btn_y, PANEL_WIDTH - 30, 32)
-        pygame.draw.rect(self.surface, (60, 80, 100), flip_rect, border_radius=6)
-        pygame.draw.rect(self.surface, (140, 140, 180), flip_rect, 1, border_radius=6)
-        flabel = self._font_small.render(
-            "Flip: Flipped (F)" if flipped else "Flip: Normal (F)",
-            True, (220, 220, 220),
-        )
-        self.surface.blit(flabel, (flip_rect.centerx - flabel.get_width() // 2,
-                                   flip_rect.centery - flabel.get_height() // 2))
-        self.flip_button_rect = flip_rect
+        hint = fonts.get(int(self.cell * 0.18))
+        surf.blit(hint.render("ESC: menu", True, config.COLOR_TEXT_MUTED),
+                  (pad, self.H - 14 - hint.get_height()))
 
-        undo_rect = pygame.Rect(panel_x + 10, btn_y + 40, PANEL_WIDTH - 30, 32)
-        undo_color = (70, 90, 120) if undo_enabled else (50, 50, 60)
-        pygame.draw.rect(self.surface, undo_color, undo_rect, border_radius=6)
-        pygame.draw.rect(self.surface, (140, 140, 180), undo_rect, 1, border_radius=6)
-        ulabel = self._font_small.render(
-            "Undo (U)" if undo_enabled else "Undo (-)",
-            True, (220, 220, 220) if undo_enabled else (130, 130, 130),
-        )
-        self.surface.blit(ulabel, (undo_rect.centerx - ulabel.get_width() // 2,
-                                   undo_rect.centery - ulabel.get_height() // 2))
-        self.undo_button_rect = undo_rect
-
-        mute_rect = pygame.Rect(panel_x + 10, btn_y + 80, PANEL_WIDTH - 30, 32)
-        pygame.draw.rect(self.surface, (60, 60, 80), mute_rect, border_radius=6)
-        pygame.draw.rect(self.surface, (140, 140, 180), mute_rect, 1, border_radius=6)
-        mlabel = self._font_small.render(
-            "Sound: OFF (M)" if muted else "Sound: ON (M)",
-            True, (220, 220, 220),
-        )
-        self.surface.blit(mlabel, (mute_rect.centerx - mlabel.get_width() // 2,
-                                   mute_rect.centery - mlabel.get_height() // 2))
-        self.mute_button_rect = mute_rect
-
-    def _draw_spinner(self, x: int, y: int, tick_ms: int) -> None:
-        cx, cy = x + 14, y + 14
-        angle = (tick_ms / 600) * 2 * math.pi
+    def _spinner(self, cx, cy, tick_ms) -> None:
+        import math
+        r = max(8, self.cell // 8)
         for i in range(8):
-            a = angle + i * math.pi / 4
-            px = cx + int(12 * math.cos(a))
-            py = cy + int(12 * math.sin(a))
-            alpha = int(255 * (i + 1) / 8)
-            c = (alpha, alpha, alpha)
-            pygame.draw.circle(self.surface, c, (px, py), 3)
+            a = tick_ms / 110.0 + i * math.pi / 4
+            alpha = 60 + (i * 24) % 200
+            ex, ey = cx + math.cos(a) * r, cy + math.sin(a) * r
+            s = pygame.Surface((6, 6), pygame.SRCALPHA)
+            pygame.draw.circle(s, (255, 215, 0, alpha), (3, 3), 3)
+            self.surface.blit(s, (ex - 3, ey - 3))
 
-    # ------------------------------------------------------------------
-    # Win / game-over overlay
-    # ------------------------------------------------------------------
+    # -- buttons ------------------------------------------------------------
 
-    def draw_game_over_overlay(
-        self,
-        surface: pygame.Surface,
-        winner: Color | None,
-        hover_replay: bool,
-        hover_quit: bool,
-    ) -> tuple[pygame.Rect, pygame.Rect]:
-        """Draw win overlay. Returns (replay_btn_rect, quit_btn_rect)."""
-        overlay = pygame.Surface((_config.WINDOW_WIDTH, _config.WINDOW_HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 160))
-        surface.blit(overlay, (0, 0))
+    def _button(self, rect: pygame.Rect, text: str, *, hovered=None,
+                enabled=True, base=None) -> pygame.Rect:
+        mx, my = pygame.mouse.get_pos()
+        hover = rect.collidepoint(mx, my) if hovered is None else hovered
+        base = base or config.COLOR_BUTTON_NORMAL
+        color = config.COLOR_BUTTON_HOVER if (hover and enabled) else base
+        if not enabled:
+            color = (52, 56, 60)
+        pygame.draw.rect(self.surface, color, rect, border_radius=8)
+        pygame.draw.rect(self.surface, (150, 160, 180), rect, 1, border_radius=8)
+        f = fonts.get(int(rect.height * 0.42), bold=True)
+        label = f.render(text, True, config.COLOR_BUTTON_TEXT if enabled else (120, 124, 128))
+        self.surface.blit(label, (rect.centerx - label.get_width() // 2,
+                                  rect.centery - label.get_height() // 2))
+        return rect
 
-        cx = _config.WINDOW_WIDTH // 2
-        cy = _config.WINDOW_HEIGHT // 2
+    # -- main menu ----------------------------------------------------------
 
-        if winner is not None:
-            wname = "Blue" if winner == Color.BLUE else "Black"
-            msg = f"{wname} wins!"
-            color = (100, 160, 255) if winner == Color.BLUE else (200, 200, 200)
+    def draw_menu(self, *, difficulty, player_first, flipped) -> None:
+        surf = self.surface
+        surf.fill(config.COLOR_BG)
+        # decorative board backdrop
+        self._draw_terrain()
+        self._draw_grid()
+        veil = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
+        veil.fill((0, 0, 0, 150))
+        surf.blit(veil, (0, 0))
+
+        cx = self.W // 2
+        title = fonts.get(int(self.cell * 0.95), bold=True)
+        t = title.render("JUNGLE", True, config.COLOR_TEXT_LIGHT)
+        surf.blit(t, (cx - t.get_width() // 2, int(self.H * 0.1)))
+        sub = fonts.get(int(self.cell * 0.3))
+        st = sub.render("Dou Shou Qi  -  Battle of the Animals", True, config.COLOR_TEXT_MUTED)
+        surf.blit(st, (cx - st.get_width() // 2, int(self.H * 0.1) + int(self.cell)))
+
+        bw = int(self.W * 0.44)
+        bh = max(40, int(self.cell * 0.62))
+        gap = int(bh * 0.34)
+        y = int(self.H * 0.34)
+        bx = cx - bw // 2
+        self.menu_buttons = {}
+        self.menu_buttons["hva"] = self._button(
+            pygame.Rect(bx, y, bw, bh), "Play: Human vs AI", base=(70, 120, 90))
+        y += bh + gap
+        self.menu_buttons["ava"] = self._button(
+            pygame.Rect(bx, y, bw, bh), "Watch: AI vs AI", base=(70, 100, 140))
+        y += bh + gap
+        first = "Human first" if player_first else "AI first"
+        self.menu_buttons["first"] = self._button(
+            pygame.Rect(bx, y, bw, bh), f"First move: {first}")
+        y += bh + gap
+        self.menu_buttons["difficulty"] = self._button(
+            pygame.Rect(bx, y, bw, bh),
+            f"Difficulty: {config.DIFFICULTY_LABELS[difficulty]}")
+        y += bh + int(bh * 0.16)
+        hint = fonts.get(int(self.cell * 0.2))
+        ht = hint.render(config.DIFFICULTY_SUBTEXT[difficulty], True, config.COLOR_HIGHLIGHT_SELECT)
+        surf.blit(ht, (cx - ht.get_width() // 2, y))
+        y += int(bh * 0.7)
+        self.menu_buttons["flip"] = self._button(
+            pygame.Rect(bx, y, bw, bh), "Board view: " + ("Flipped" if flipped else "Normal"))
+
+        foot = fonts.get(int(self.cell * 0.2))
+        ft = foot.render(f"v{config.VERSION}   -   Blue always moves first",
+                         True, config.COLOR_TEXT_MUTED)
+        surf.blit(ft, (cx - ft.get_width() // 2, self.H - int(self.cell * 0.6)))
+
+    # -- game over overlay --------------------------------------------------
+
+    def draw_game_over(self, gs, *, human_color, mode_ava) -> None:
+        from engine.game_state import DRAW
+        overlay = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
+        overlay.fill(config.COLOR_OVERLAY_BG)
+        self.surface.blit(overlay, (0, 0))
+
+        cx, cy = self.W // 2, int(self.H * 0.4)
+        if gs.result == DRAW:
+            msg, color = "Draw", config.COLOR_TEXT_LIGHT
         else:
-            msg = "Draw!"
-            color = (220, 180, 60)
+            winner = gs.winner()
+            wname = "Blue" if winner == Color.BLUE else "Black"
+            if mode_ava:
+                msg = f"{wname} wins!"
+            else:
+                msg = "You win!" if winner == human_color else f"{wname} wins - you lose"
+            color = config.COLOR_BLUE_PIECE if winner == Color.BLUE else config.COLOR_HIGHLIGHT_SELECT
 
-        msg_surf = self._font_big.render(msg, True, color)
-        surface.blit(msg_surf, (cx - msg_surf.get_width() // 2, cy - 80))
+        big = fonts.get(int(self.cell * 0.8), bold=True)
+        t = big.render(msg, True, color)
+        self.surface.blit(t, (cx - t.get_width() // 2, cy - t.get_height() // 2))
 
-        sub = self._font_small.render("Game Over", True, (180, 180, 180))
-        surface.blit(sub, (cx - sub.get_width() // 2, cy - 35))
-
-        # Buttons
-        btn_w, btn_h = 140, 44
-        replay_rect = pygame.Rect(cx - btn_w - 10, cy + 10, btn_w, btn_h)
-        quit_rect = pygame.Rect(cx + 10, cy + 10, btn_w, btn_h)
-
-        for rect, label, hover in [
-            (replay_rect, "Play Again", hover_replay),
-            (quit_rect, "Quit", hover_quit),
-        ]:
-            btn_color = (100, 100, 160) if hover else (60, 60, 100)
-            pygame.draw.rect(surface, btn_color, rect, border_radius=8)
-            pygame.draw.rect(surface, (180, 180, 220), rect, 2, border_radius=8)
-            lsurf = self._font_status.render(label, True, COLOR_TEXT_LIGHT)
-            surface.blit(lsurf, (rect.centerx - lsurf.get_width() // 2,
-                                  rect.centery - lsurf.get_height() // 2))
-
-        return replay_rect, quit_rect
-
-    # ------------------------------------------------------------------
-    # Main menu
-    # ------------------------------------------------------------------
-
-    def draw_main_menu(
-        self,
-        surface: pygame.Surface,
-        difficulty: int,
-        hover_hva: bool,
-        hover_ava: bool,
-        hover_diff: bool,
-        difficulty_labels: list[str],
-        difficulty_subtext: list[str] | None = None,
-        version: str = "",
-        player_first: bool = True,
-        flipped: bool = False,
-        hover_first: bool = False,
-        hover_flip: bool = False,
-    ) -> tuple[pygame.Rect, pygame.Rect, pygame.Rect, pygame.Rect, pygame.Rect]:
-        """Draw main menu. Returns (hva_rect, ava_rect, diff_rect, first_rect, flip_rect)."""
-        surface.fill((20, 30, 20))
-
-        cx = _config.WINDOW_WIDTH // 2
-        cy = _config.WINDOW_HEIGHT // 2
-
-        # Title
-        title = self._font_big.render("JUNGLE", True, (220, 180, 60))
-        surface.blit(title, (cx - title.get_width() // 2, cy - 230))
-        sub = self._font_small.render("Dou Shou Qi  •  斗兽棋", True, (140, 140, 140))
-        surface.blit(sub, (cx - sub.get_width() // 2, cy - 185))
-
-        btn_w, btn_h = 240, 44
-        spacing = 56
-        first_y = cy - 140
-        hva_rect   = pygame.Rect(cx - btn_w // 2, first_y + spacing * 0, btn_w, btn_h)
-        ava_rect   = pygame.Rect(cx - btn_w // 2, first_y + spacing * 1, btn_w, btn_h)
-        diff_rect  = pygame.Rect(cx - btn_w // 2, first_y + spacing * 2, btn_w, btn_h)
-        first_rect = pygame.Rect(cx - btn_w // 2, first_y + spacing * 3, btn_w, btn_h)
-        flip_rect  = pygame.Rect(cx - btn_w // 2, first_y + spacing * 4, btn_w, btn_h)
-
-        for rect, label, hover in [
-            (hva_rect, "Human vs AI", hover_hva),
-            (ava_rect, "Watch AI vs AI", hover_ava),
-            (diff_rect, f"Difficulty: {difficulty_labels[difficulty]}", hover_diff),
-            (first_rect, f"First move: {'Player' if player_first else 'AI'}", hover_first),
-            (flip_rect, f"Board: {'Flipped' if flipped else 'Normal'}", hover_flip),
-        ]:
-            btn_color = (80, 110, 80) if hover else (40, 70, 40)
-            pygame.draw.rect(surface, btn_color, rect, border_radius=10)
-            pygame.draw.rect(surface, (100, 160, 100), rect, 2, border_radius=10)
-            lsurf = self._font_status.render(label, True, COLOR_TEXT_LIGHT)
-            surface.blit(lsurf, (rect.centerx - lsurf.get_width() // 2,
-                                  rect.centery - lsurf.get_height() // 2))
-
-        if difficulty_subtext:
-            sub_text = difficulty_subtext[difficulty]
-            sub_surf = self._font_small.render(sub_text, True, (170, 200, 170))
-            surface.blit(sub_surf, (cx - sub_surf.get_width() // 2, flip_rect.bottom + 12))
-
-        hint = self._font_small.render(
-            "ESC: menu  |  U: undo  |  M: mute  |  F: flip", True, (80, 80, 80)
-        )
-        surface.blit(hint, (cx - hint.get_width() // 2, flip_rect.bottom + 36))
-
-        if version:
-            v_surf = self._font_small.render(f"v{version}", True, (60, 60, 60))
-            surface.blit(v_surf, (_config.WINDOW_WIDTH - v_surf.get_width() - 10,
-                                   _config.WINDOW_HEIGHT - v_surf.get_height() - 8))
-
-        return hva_rect, ava_rect, diff_rect, first_rect, flip_rect
+        bw = int(self.W * 0.3)
+        bh = max(40, int(self.cell * 0.6))
+        gap = 20
+        y = int(self.H * 0.56)
+        self.over_buttons = {}
+        self.over_buttons["again"] = self._button(
+            pygame.Rect(cx - bw - gap // 2, y, bw, bh), "Play again", base=(70, 120, 90))
+        self.over_buttons["quit"] = self._button(
+            pygame.Rect(cx + gap // 2, y, bw, bh), "Quit", base=(140, 80, 80))

@@ -1,8 +1,4 @@
-"""Lightweight pygame.mixer wrapper for game SFX.
-
-Sounds are loaded lazily and gracefully degrade to silence if files or the
-mixer subsystem are unavailable (e.g., headless test runs).
-"""
+"""Sound effects with graceful degradation (the game runs fine without audio)."""
 
 from __future__ import annotations
 
@@ -10,49 +6,38 @@ import os
 
 import pygame
 
-from config import asset_path
-
-_SOUNDS = {
-    "move":    "move.wav",
-    "capture": "capture.wav",
-    "win":     "win.wav",
-}
+import config
 
 
 class Audio:
     def __init__(self) -> None:
-        self._cache: dict[str, pygame.mixer.Sound | None] = {}
+        self.enabled = False
         self.muted = False
-        self._available = False
+        self._sounds: dict[str, pygame.mixer.Sound] = {}
         try:
             if not pygame.mixer.get_init():
                 pygame.mixer.init()
-            self._available = pygame.mixer.get_init() is not None
+            self.enabled = True
         except Exception:
-            self._available = False
-        if self._available:
-            self._load_all()
-
-    def _load_all(self) -> None:
-        for name, fname in _SOUNDS.items():
-            path = asset_path(os.path.join("gui", "assets", "sounds", fname))
-            if os.path.exists(path):
-                try:
-                    self._cache[name] = pygame.mixer.Sound(path)
-                except Exception:
-                    self._cache[name] = None
-            else:
-                self._cache[name] = None
+            self.enabled = False
+            return
+        for name in ("move", "capture", "win"):
+            path = config.asset_path(os.path.join("gui", "assets", "sounds", f"{name}.wav"))
+            try:
+                self._sounds[name] = pygame.mixer.Sound(path)
+            except Exception:
+                pass
 
     def play(self, name: str) -> None:
-        if self.muted or not self._available:
+        if not self.enabled or self.muted:
             return
-        snd = self._cache.get(name)
+        snd = self._sounds.get(name)
         if snd is not None:
             try:
                 snd.play()
             except Exception:
                 pass
 
-    def toggle_mute(self) -> None:
+    def toggle_mute(self) -> bool:
         self.muted = not self.muted
+        return self.muted

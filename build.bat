@@ -1,28 +1,30 @@
 @echo off
 REM ==========================================================================
 REM  Jungle board game - Windows build script
-REM  Produces: release\jungle_game.exe (standalone, no Python required)
-REM            release\jungle_game.zip (exe + README for distribution)
+REM  Output: release\jungle_game.exe (standalone, no Python needed)
+REM          release\jungle_game.zip (exe + README for distribution)
+REM
+REM  Usage:  build.bat
+REM  Uses a local venv if one exists, otherwise the Python on PATH.
 REM ==========================================================================
+setlocal
 
 echo.
 echo =========================================
-echo  Jungle Board Game - Build Script
+echo  Jungle Board Game - Build
 echo =========================================
 echo.
 
-REM Activate virtual environment
-call venv\Scripts\activate.bat
-if errorlevel 1 (
-    echo ERROR: Could not activate venv. Run setup first:
-    echo   python -m venv venv
-    echo   venv\Scripts\pip install -r requirements.txt
-    exit /b 1
+if exist venv\Scripts\activate.bat call venv\Scripts\activate.bat
+
+REM Ensure assets exist (fresh checkout / clean build).
+if not exist gui\assets\pieces\lion_blue.png (
+    echo [0/5] Generating assets...
+    python generate_assets.py || (echo ERROR: asset generation failed & exit /b 1)
 )
 
-REM Run tests before building
 echo [1/5] Running tests...
-pytest tests\ -v --tb=short -q
+python -m pytest tests\ -q
 if errorlevel 1 (
     echo.
     echo ERROR: Tests failed. Fix failures before packaging.
@@ -31,26 +33,21 @@ if errorlevel 1 (
 echo   Tests passed.
 echo.
 
-REM Clean previous build artifacts
 echo [2/5] Cleaning previous build...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
-if exist jungle_game.spec del jungle_game.spec
+if exist jungle_game.spec del /q jungle_game.spec
 echo   Done.
 echo.
 
-REM Run PyInstaller
 echo [3/5] Packaging with PyInstaller...
-PyInstaller ^
+python -m PyInstaller ^
     --onefile ^
     --windowed ^
     --name jungle_game ^
+    --icon gui\assets\tiles\icon.ico ^
     --add-data "gui\assets;gui\assets" ^
-    --add-data "gui\assets\tiles;gui\assets\tiles" ^
-    --add-data "gui\assets\pieces;gui\assets\pieces" ^
-    --add-data "gui\assets\sounds;gui\assets\sounds" ^
     main.py
-
 if errorlevel 1 (
     echo.
     echo ERROR: PyInstaller packaging failed.
@@ -59,10 +56,9 @@ if errorlevel 1 (
 echo   Packaging complete.
 echo.
 
-REM Copy exe to release folder
 echo [4/5] Copying to release folder...
 if not exist release mkdir release
-copy /Y dist\jungle_game.exe release\jungle_game.exe
+copy /Y dist\jungle_game.exe release\jungle_game.exe >nul
 if errorlevel 1 (
     echo ERROR: Could not copy exe to release folder.
     exit /b 1
@@ -70,10 +66,9 @@ if errorlevel 1 (
 echo   Done.
 echo.
 
-REM Create distribution zip
 echo [5/5] Creating distribution zip...
 if exist release\jungle_game.zip del /q release\jungle_game.zip
-powershell -NoProfile -Command "Compress-Archive -Path 'release\jungle_game.exe','release\README.txt' -DestinationPath 'release\jungle_game.zip' -Force"
+powershell -NoProfile -Command "Compress-Archive -Path 'release\jungle_game.exe','release\README.md' -DestinationPath 'release\jungle_game.zip' -Force"
 if errorlevel 1 (
     echo ERROR: Could not create release\jungle_game.zip.
     exit /b 1
@@ -84,11 +79,11 @@ echo.
 echo =========================================
 echo  BUILD SUCCESSFUL
 echo =========================================
+echo   Output: release\jungle_game.exe
+echo   Zip:    release\jungle_game.zip
+echo   Docs:   release\README.md
 echo.
-echo  Output: release\jungle_game.exe
-echo  Zip:    release\jungle_game.zip
-echo  Docs:   release\README.txt
-echo.
-echo  Test the packaged executable:
+echo  Now test the packaged executable:
 echo    release\jungle_game.exe
 echo.
+endlocal

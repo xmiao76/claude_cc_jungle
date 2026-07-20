@@ -1,13 +1,30 @@
-venv/
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# PyInstaller build artifacts
 build/
 dist/
 *.spec
-.pytest_cache/
-*.egg-info/
-*.exe
-/.claude
+
+# The distributable release/jungle_game.zip (exe + README) is tracked. The loose
+# release/jungle_game.exe is reproducible from the zip / build.bat, so we don't
+# version the redundant ~15 MB binary separately.
+release/jungle_game.exe
+build_out*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
