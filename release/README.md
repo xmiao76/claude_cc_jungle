@@ -51,8 +51,9 @@ draw.)
 
     Elephant (8) > Lion (7) > Tiger (6) > Leopard (5) > Wolf (4) > Dog (3) > Cat (2) > Rat (1)
 
-The number on each token is its rank. A piece captures an enemy of **equal or
-lower** rank on an adjacent square — with one famous exception:
+Each token shows the animal's **name**; its rank is its place in the order above
+(Elephant highest, Rat lowest). A piece captures an enemy of **equal or lower**
+rank on an adjacent square — with one famous exception:
 
 - **The Rat (1) can capture the Elephant (8).** (And the Elephant may **not**
   capture the Rat.)

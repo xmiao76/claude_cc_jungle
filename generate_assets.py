@@ -278,15 +278,27 @@ def draw_piece(animal: Animal, owner: str, font: pygame.font.Font) -> pygame.Sur
     _circle(surf, _shade(face, 0.8), (cx, cy), r_face, max(2, int(s * 0.008)))
     FEATURES[animal](surf, cx, cy, r_face)
 
-    # rank badge (bottom)
-    br = s * 0.13
-    bx, by = cx, cy + r_token * 0.72
-    _circle(surf, WHITE, (bx, by), br)
-    _circle(surf, RING_DARK[owner], (bx, by), br, max(2, int(s * 0.01)))
-    label = font.render(str(int(animal)), True, RING_DARK[owner])
+    # name plate (bottom): the animal's English name, no rank digit
+    plate_w = r_token * 1.32
+    plate_h = s * 0.155
+    plate_cx = cx
+    plate_cy = cy + r_token * 0.58
+    rect = pygame.Rect(int(plate_cx - plate_w / 2), int(plate_cy - plate_h / 2),
+                       int(plate_w), int(plate_h))
+    radius = int(plate_h * 0.5)
+    pygame.draw.rect(surf, WHITE, rect, border_radius=radius)
+    pygame.draw.rect(surf, RING_DARK[owner], rect, max(2, int(s * 0.008)), border_radius=radius)
+
+    name = ANIMAL_NAME[animal].upper()
+    label = font.render(name, True, RING_DARK[owner])
+    # Scale the label to fit inside the plate, preserving aspect ratio and never
+    # upscaling (the base render is large, so short names stay crisp).
+    max_w, max_h = plate_w * 0.9, plate_h * 0.72
+    scale = min(max_w / label.get_width(), max_h / label.get_height(), 1.0)
     label = pygame.transform.smoothscale(
-        label, (int(label.get_width() * br * 1.3 / label.get_height()), int(br * 1.3)))
-    surf.blit(label, (bx - label.get_width() / 2, by - label.get_height() / 2))
+        label, (max(1, int(label.get_width() * scale)), max(1, int(label.get_height() * scale))))
+    surf.blit(label, (int(plate_cx - label.get_width() / 2),
+                      int(plate_cy - label.get_height() / 2)))
 
     return pygame.transform.smoothscale(surf, (PIECE_SIZE, PIECE_SIZE))
 
