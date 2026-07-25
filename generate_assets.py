@@ -4,8 +4,9 @@ Run this once to populate gui/assets/tiles/ and gui/assets/pieces/.
 This script produces attractive, polished visuals without requiring external images.
 """
 
-import os
 import math
+import os
+
 import pygame
 
 from gui.fonts import safe_sysfont
@@ -485,6 +486,26 @@ _DRAW_FUNCS = {
 # Icon generation
 # ---------------------------------------------------------------------------
 
+def _save_ico(png_path: str, ico_path: str) -> None:
+    """Write a Windows .ico beside the .png, for PyInstaller's --icon.
+
+    PyInstaller needs a real .ico to brand the executable; pygame cannot write
+    one. Pillow can, and it is already a build-time dependency. If Pillow is
+    missing the build still works, just with the default PyInstaller icon.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        print("  (Pillow not installed - skipping icon.ico; exe will use the default icon)")
+        return
+    with Image.open(png_path) as img:
+        img.convert("RGBA").save(
+            ico_path, format="ICO",
+            sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (256, 256)],
+        )
+    print(f"  Saved {ico_path} (executable icon)")
+
+
 def make_icon() -> pygame.Surface:
     s = new_surface(32, 32)
     s.fill((40, 100, 40))
@@ -506,8 +527,8 @@ def make_icon() -> pygame.Surface:
 
 def _write_wav(path: str, samples, sample_rate: int = 22050) -> None:
     """Write a mono 16-bit PCM WAV from an iterable of float samples in [-1, 1]."""
-    import wave
     import struct
+    import wave
     pcm = bytearray()
     for s in samples:
         v = max(-1.0, min(1.0, s))
@@ -580,9 +601,10 @@ def generate_all():
 
     # Icon
     icon_surf = make_icon()
-    icon_path = os.path.join(OUTPUT_TILES, "icon.ico")
-    pygame.image.save(icon_surf, os.path.join(OUTPUT_TILES, "icon.png"))
-    print(f"  Saved {os.path.join(OUTPUT_TILES, 'icon.png')} (use as icon)")
+    icon_png = os.path.join(OUTPUT_TILES, "icon.png")
+    pygame.image.save(icon_surf, icon_png)
+    print(f"  Saved {icon_png} (window icon)")
+    _save_ico(icon_png, os.path.join(OUTPUT_TILES, "icon.ico"))
 
     print("\nGenerating piece sprites...")
     for color_name, (body, dark, light) in [

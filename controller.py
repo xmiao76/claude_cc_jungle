@@ -3,23 +3,26 @@
 from __future__ import annotations
 
 import threading
+import traceback
 from enum import Enum, auto
 
 import pygame
 
+import config
+from ai.minimax import AIPlayer
 from config import (
+    AI_TIME_HARD_MS,
+    DIFFICULTY_LABELS,
+    DIFFICULTY_SUBTEXT,
     FPS,
-    DIFFICULTY_LABELS, DIFFICULTY_SUBTEXT, AI_TIME_HARD_MS,
     VERSION,
 )
-from engine.game_state import GameState
-from engine.pieces import Color, piece_id_color, piece_id_animal
 from engine.board import Move
-from ai.minimax import AIPlayer
-from gui.renderer import Renderer
-from gui.input_handler import InputHandler
+from engine.game_state import GameState
+from engine.pieces import Color, piece_id_animal, piece_id_color
 from gui.audio import Audio
-import config
+from gui.input_handler import InputHandler
+from gui.renderer import Renderer
 
 
 class AppState(Enum):
@@ -47,6 +50,9 @@ class Controller:
 
         self._ai_blue: AIPlayer | None = None
         self._ai_black: AIPlayer | None = None
+        # Monotonic token identifying the current search. A result arriving with a
+        # stale token belongs to a position we have already left and is discarded.
+        self._ai_generation = 0
 
         self._hover_hva = False
         self._hover_ava = False
@@ -73,6 +79,8 @@ class Controller:
         # piece animation finishes. Lets the human see their move slide.
         self._pending_ai_after_anim = False
 
+        self._quit_requested = False
+
         self._clock = pygame.time.Clock()
 
     # ------------------------------------------------------------------
@@ -83,10 +91,14 @@ class Controller:
         while True:
             tick_ms = pygame.time.get_ticks()
             if not self._handle_events(tick_ms):
-                return
+                break
+            if self._quit_requested:
+                break
             self._update(tick_ms)
             self._render(tick_ms)
             self._clock.tick(FPS)
+        # Stop any search still burning CPU so the process can exit promptly.
+        self._abandon_ai_search()
 
     # ------------------------------------------------------------------
     # Event handling
@@ -108,7 +120,8 @@ class Controller:
                     self._toggle_flip()
 
             if event.type == config.AI_MOVE_EVENT_TYPE:
-                self._on_ai_move(event.move, tick_ms)
+                self._on_ai_move(event.move, tick_ms,
+                                 getattr(event, "generation", self._ai_generation))
 
             if event.type == pygame.MOUSEMOTION:
                 self._handle_hover(event.pos)
@@ -150,8 +163,10 @@ class Controller:
             if self._replay_rect and self._replay_rect.collidepoint(mx, my):
                 self._start_game(ava=self.mode_ava)
             elif self._quit_rect and self._quit_rect.collidepoint(mx, my):
-                pygame.quit()
-                import sys; sys.exit(0)
+                # Leave the loop and let main() shut pygame down once. Calling
+                # pygame.quit() here raced the daemon AI thread's event post into
+                # a torn-down display subsystem.
+                self._quit_requested = True
             return
 
         # In-game: side-panel buttons take priority
@@ -177,10 +192,16 @@ class Controller:
     # ------------------------------------------------------------------
 
     def _start_game(self, ava: bool) -> None:
+        # Stop and disown any search still running for the previous game before
+        # replacing the state it was computed against.
+        self._abandon_ai_search()
+
         self.mode_ava = ava
         self.gs.new_game()
         self.input_handler.reset()
         self._pending_ai_after_anim = False
+        # Otherwise a piece from the finished game keeps sliding across the new one.
+        self.renderer.clear_transient_effects()
 
         self._ai_blue = AIPlayer(Color.BLUE, self.difficulty)
         self._ai_black = AIPlayer(Color.BLACK, self.difficulty)
@@ -205,22 +226,67 @@ class Controller:
     # AI thread
     # ------------------------------------------------------------------
 
+    def _abandon_ai_search(self) -> None:
+        """Invalidate any in-flight search and ask it to stop.
+
+        Bumping the generation makes a result that is already on its way back get
+        discarded on arrival; `request_stop` frees the CPU instead of letting an
+        orphaned thread run to completion.
+        """
+        self._ai_generation += 1
+        for ai in (self._ai_blue, self._ai_black):
+            if ai is not None:
+                ai.request_stop()
+
     def _start_ai_thread(self, color: Color) -> None:
         ai = self._ai_blue if color == Color.BLUE else self._ai_black
         gs_copy = self.gs.copy()
+        self._ai_generation += 1
+        generation = self._ai_generation
 
         def _run():
-            budget = AI_TIME_HARD_MS if self.difficulty == 2 else 1000
-            move = ai.get_best_move(gs_copy, time_budget_ms=budget)
-            evt = pygame.event.Event(config.AI_MOVE_EVENT_TYPE, {"move": move})
-            pygame.event.post(evt)
+            move = None
+            try:
+                budget = AI_TIME_HARD_MS if self.difficulty == 2 else 1000
+                move = ai.get_best_move(gs_copy, time_budget_ms=budget)
+            except Exception:
+                # Without this the thread dies silently, no event is ever posted,
+                # and the game sits in AI_THINKING forever. Under a --windowed
+                # build there is no console, so also surface it in the UI.
+                traceback.print_exc()
+            try:
+                pygame.event.post(pygame.event.Event(
+                    config.AI_MOVE_EVENT_TYPE,
+                    {"move": move, "generation": generation},
+                ))
+            except pygame.error:
+                # Display torn down while we were thinking; nothing to deliver to.
+                pass
 
-        t = threading.Thread(target=_run, daemon=True)
+        t = threading.Thread(target=_run, daemon=True, name=f"ai-{color.name}-{generation}")
         t.start()
 
-    def _on_ai_move(self, move: Move | None, tick_ms: int) -> None:
-        if move is None or self.gs.is_terminal():
+    def _on_ai_move(self, move: Move | None, tick_ms: int, generation: int = 0) -> None:
+        # Discard a result computed for a position we have since left — the user
+        # pressed Escape, restarted, or undid. Applying it would corrupt the
+        # board: `make_move` on an empty source square writes piece id 0 into the
+        # grid, XORs a bogus Zobrist key and files a phantom piece.
+        if generation != self._ai_generation:
             return
+        if self.gs.is_terminal():
+            return
+
+        if move is None or move not in self.gs.legal_moves():
+            # The search failed (traceback already printed) or returned something
+            # illegal for this position. Keep playing rather than freezing, but do
+            # not stay silent about it.
+            print(f"[controller] discarding unusable AI move {move!r}; "
+                  f"falling back to a legal move")
+            legal = self.gs.legal_moves()
+            if not legal:
+                self.state = AppState.GAME_OVER
+                return
+            move = legal[0]
 
         if move.captured:
             self.renderer.trigger_capture_flash(move.tc, move.tr, tick_ms)
@@ -291,6 +357,8 @@ class Controller:
             return
         if self.state not in (AppState.HUMAN_TURN, AppState.GAME_OVER):
             return
+        # An undo rewrites the position the AI may still be thinking about.
+        self._abandon_ai_search()
         # Need at least one full round (human + AI) to undo cleanly when in HUMAN_TURN,
         # or one ply to roll back the game-over screen.
         if not self.gs.history:
@@ -306,13 +374,15 @@ class Controller:
         self.input_handler.reset()
         self.state = AppState.HUMAN_TURN
         self._pending_ai_after_anim = False
-        self.renderer._animations.clear()
+        self.renderer.clear_transient_effects()
 
     def _undo_enabled(self) -> bool:
+        # Must agree with the guards in `_try_undo`, or the button greys out in
+        # situations where the U key still works.
         return (
             not self.mode_ava
-            and self.state == AppState.HUMAN_TURN
-            and len(self.gs.history) >= 2
+            and self.state in (AppState.HUMAN_TURN, AppState.GAME_OVER)
+            and bool(self.gs.history)
         )
 
     # ------------------------------------------------------------------
@@ -379,7 +449,8 @@ class Controller:
     # ------------------------------------------------------------------
 
     def _go_to_menu(self) -> None:
+        self._abandon_ai_search()
         self.state = AppState.MENU
         self.input_handler.reset()
-        self.renderer._animations.clear()
+        self.renderer.clear_transient_effects()
         self._pending_ai_after_anim = False

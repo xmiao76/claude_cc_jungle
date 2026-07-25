@@ -1,27 +1,17 @@
 """Tests for the AI engine."""
 
 import time
-import pytest
-from engine.board import Board, Move
-from engine.game_state import GameState
-from engine.pieces import Animal, Color, make_piece_id
-from engine.move_generator import generate_legal_moves
-from ai.minimax import AIPlayer
-from config import DEN_BLACK, DEN_BLUE
 
+from ai.minimax import AIPlayer
+from config import DEN_BLACK
+from engine.game_state import GameState
+from engine.pieces import Animal, Color
+from tests.helpers import make_gs
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_gs(*piece_specs) -> GameState:
-    gs = GameState()
-    gs.board = Board()
-    for (c, r, color, animal) in piece_specs:
-        pid = make_piece_id(color, animal)
-        gs.board._grid[c][r] = pid
-        gs.board._piece_positions[int(color)][pid] = (c, r)
-    return gs
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +92,7 @@ def test_ai_never_illegal_move():
         if gs.is_terminal():
             break
 
-        legal = set((m.fc, m.fr, m.tc, m.tr) for m in gs.legal_moves())
+        legal = {(m.fc, m.fr, m.tc, m.tr) for m in gs.legal_moves()}
         ai = AIPlayer(gs.turn, difficulty=1)
         move = ai.get_best_move(gs, time_budget_ms=500)
 

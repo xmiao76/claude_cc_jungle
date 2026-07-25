@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from engine.board import Board, Move
-from engine.pieces import (
-    Color, ANIMAL_NAMES, piece_id_color, piece_id_animal,
-)
-from engine.rules import check_win, WinResult
 from engine.move_generator import generate_legal_moves
+from engine.pieces import (
+    ANIMAL_NAMES,
+    Color,
+    piece_id_animal,
+    piece_id_color,
+)
+from engine.rules import WinResult, check_win
 
 
 def _square_name(c: int, r: int) -> str:
@@ -170,7 +173,7 @@ class GameState:
         """True for explicit draw conditions (50-move; 3-fold not auto-claimed)."""
         return self.is_50_move_draw() and self.result is None
 
-    def copy(self) -> "GameState":
+    def copy(self) -> GameState:
         gs = GameState()
         gs.board = self.board.copy()
         gs.turn = self.turn
@@ -192,7 +195,7 @@ class GameState:
         movers = self.mover_history
         out: list[str] = []
         i = 0
-        for m, pid in zip(moves, movers):
+        for m, pid in zip(moves, movers, strict=False):
             i += 1
             if m is None:
                 continue  # skip null-move entries

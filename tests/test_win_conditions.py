@@ -1,26 +1,15 @@
 """Tests for win condition detection."""
 
-import pytest
-from engine.board import Board, Move
+from engine.board import Move
 from engine.game_state import GameState
 from engine.pieces import Animal, Color, make_piece_id
-from engine.rules import check_win
-from config import DEN_BLACK, DEN_BLUE
-
+from tests.helpers import make_gs
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_gs_with_pieces(*piece_specs) -> GameState:
-    """Create a GameState with specified pieces. piece_specs: (col, row, Color, Animal)"""
-    gs = GameState()
-    gs.board = Board()
-    for (c, r, color, animal) in piece_specs:
-        pid = make_piece_id(color, animal)
-        gs.board._grid[c][r] = pid
-        gs.board._piece_positions[int(color)][pid] = (c, r)
-    return gs
+make_gs_with_pieces = make_gs
 
 
 # ---------------------------------------------------------------------------
@@ -116,30 +105,23 @@ def test_normal_capture_no_win():
 # ---------------------------------------------------------------------------
 
 def test_stalemate_loses():
-    """Player with no legal moves loses."""
-    # Place Black Rat in a corner with no legal moves AND can't be reached.
-    # Simpler: just test is_terminal and get_winner when no moves available.
+    """A player with no legal moves loses.
+
+    The Black Rat sits in the (6,8) corner, so it has only two neighbours:
+    (5,8) and (6,7). Blocking both with pieces the Rat cannot capture leaves it
+    with zero moves. The blockers must be ranks 2-7: a Rat may capture another
+    Rat, and — crucially — a Rat *can* capture an Elephant, so an Elephant is
+    not a blocker. (An earlier version of this test used an Elephant and a Lion,
+    which left the Rat a legal capture; the assertions then sat behind an
+    `if not moves:` guard that never ran.)
+    """
     gs = make_gs_with_pieces(
-        (0, 0, Color.BLUE, Animal.ELEPHANT),
+        (6, 8, Color.BLACK, Animal.RAT),   # boxed into the corner
+        (5, 8, Color.BLUE, Animal.CAT),    # rank 2 — Rat cannot take it
+        (6, 7, Color.BLUE, Animal.DOG),    # rank 3 — Rat cannot take it
     )
-    # Blue has Elephant, Black has nothing → Blue already won by capture-all
-    # Instead test stalemate: Black has a piece surrounded by Blue pieces
-    # with no moves. Use a position where Black's piece is boxed in.
-    gs2 = make_gs_with_pieces(
-        (6, 8, Color.BLACK, Animal.RAT),   # corner
-        (5, 8, Color.BLUE, Animal.ELEPHANT),  # blocks left
-        (6, 7, Color.BLUE, Animal.LION),      # blocks up
-        (0, 0, Color.BLUE, Animal.CAT),       # dummy Blue piece elsewhere
-    )
-    gs2.turn = Color.BLACK
-    moves = gs2.legal_moves()
-    # The Rat at (6,8) can't move right (off-board) or down (off-board),
-    # can't move to (5,8) — occupied by higher-rank Blue Elephant (won't be captured),
-    # can't move to (6,7) — blocked by Blue Lion (higher rank)
-    # Also (6,8) is Blue's den — but it's Black's piece, not allowed to enter own den (no, wait:
-    # (6,8) is NOT a den; Blue den is (3,8). So Black Rat can move to (5,8) if it can capture.
-    # Elephant rank 8 > Rat rank 1 → cannot capture. Lion rank 7 > Rat rank 1 → cannot capture.
-    # So Black Rat has 0 moves.
-    if not moves:
-        assert gs2.is_terminal()
-        assert gs2.get_winner() == Color.BLUE
+    gs.turn = Color.BLACK
+
+    assert gs.legal_moves() == [], "Black Rat should be completely boxed in"
+    assert gs.is_terminal()
+    assert gs.get_winner() == Color.BLUE, "Side with no legal moves loses"

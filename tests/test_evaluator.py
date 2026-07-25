@@ -1,23 +1,14 @@
 """Tests for ai/evaluator.py."""
 
-from engine.board import Board
-from engine.game_state import GameState
-from engine.pieces import Animal, Color, make_piece_id
-from ai.evaluator import evaluate, _INF
+from ai.evaluator import _INF, evaluate
 from config import (
-    DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE,
-    PIECE_VALUES, EVAL_WEIGHTS,
+    EVAL_WEIGHTS,
+    PIECE_VALUES,
+    TRAPS_BLUE,
 )
-
-
-def make_gs(*piece_specs) -> GameState:
-    gs = GameState()
-    gs.board = Board()
-    for (c, r, color, animal) in piece_specs:
-        pid = make_piece_id(color, animal)
-        gs.board._grid[c][r] = pid
-        gs.board._piece_positions[int(color)][pid] = (c, r)
-    return gs
+from engine.game_state import GameState
+from engine.pieces import Animal, Color
+from tests.helpers import make_gs
 
 
 def test_evaluate_starting_position_is_symmetric():
@@ -50,6 +41,7 @@ def test_evaluate_trap_control_bonus():
     otherwise dominate this contrived position.
     """
     from dataclasses import replace
+
     from ai.search_config import strong_config
     cfg = replace(strong_config(), use_den_threat=False, use_pst=False)
     trap = next(iter(TRAPS_BLUE))
@@ -87,22 +79,47 @@ def test_evaluate_symmetry_random_midgame():
         (3, 4, Color.BLUE, Animal.TIGER),
         (3, 5, Color.BLACK, Animal.WOLF),
         (3, 6, Color.BLACK, Animal.LION),
-        (0, 8, Color.BLUE, Animal.RAT),
+        (0, 8, Color.BLUE, Animal.ELEPHANT),
         (6, 0, Color.BLACK, Animal.CAT),
-        (1, 3, Color.BLUE, Animal.RAT),
+        (1, 3, Color.BLUE, Animal.RAT),     # in the river
     )
     gs.turn = Color.BLUE
     assert evaluate(gs, Color.BLUE) == -evaluate(gs, Color.BLACK)
 
 
-def test_evaluate_terminal_returns_inf():
-    """When the game is decided, eval returns +/- _INF."""
-    gs = make_gs((3, 0, Color.BLUE, Animal.WOLF))   # Wolf already in black den
-    # Force terminal via the result hook by simulating apply_move semantics:
+def test_evaluate_is_purely_static():
+    """`evaluate` must not score terminal positions — that is the search's job.
+
+    It used to return ±_INF for a decided position. Because _INF is *larger* than
+    the mate band (`ai.minimax._MATE`), such a score outranked every real mate,
+    broke mate-distance preference, and was stored in the TT outside the
+    alpha/beta window. It also forced a `legal_moves()` call on every evaluation.
+    Mate scores now come only from the search, which knows the ply.
+    """
     from engine.rules import WinResult
+
+    gs = make_gs((3, 0, Color.BLUE, Animal.WOLF))   # Wolf already in black den
     gs.result = WinResult(Color.BLUE)
-    assert evaluate(gs, Color.BLUE) == _INF
-    assert evaluate(gs, Color.BLACK) == -_INF
+
+    blue = evaluate(gs, Color.BLUE)
+    assert abs(blue) < _INF, "evaluate must not emit the alpha/beta sentinel"
+    assert blue == -evaluate(gs, Color.BLACK), "antisymmetry must still hold"
+
+
+def test_search_scores_a_decided_position_as_a_mate():
+    """The mate score must come from the search, inside the mate band."""
+    from ai.minimax import _MATE, _MATE_BOUND, AIPlayer
+
+    gs = make_gs(
+        (3, 1, Color.BLUE, Animal.WOLF),    # one step from Black's den
+        (0, 0, Color.BLACK, Animal.LION),
+    )
+    gs.turn = Color.BLUE
+    ai = AIPlayer(Color.BLUE, 2)
+    score = ai._negamax_root(gs, 2, -_INF, _INF)
+
+    assert score >= _MATE_BOUND, f"one-move den win should score as a mate, got {score}"
+    assert score <= _MATE, "mate scores must stay inside the mate band, below _INF"
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +128,7 @@ def test_evaluate_terminal_returns_inf():
 
 def test_pst_table_is_column_symmetric():
     """No left/right bias: PST[adv][c] == PST[adv][COLS-1-c]."""
-    from config import PST_TABLE, COLS, ROWS
+    from config import COLS, PST_TABLE, ROWS
     for adv in range(ROWS):
         for c in range(COLS):
             assert PST_TABLE[adv][c] == PST_TABLE[adv][COLS - 1 - c]
@@ -120,6 +137,7 @@ def test_pst_table_is_column_symmetric():
 def test_pst_keeps_start_eval_balanced():
     """Column-symmetric PST contributes exactly 0 at the symmetric start."""
     from dataclasses import replace
+
     from ai.search_config import strong_config
     gs = GameState()
     gs.new_game()
@@ -130,7 +148,7 @@ def test_pst_keeps_start_eval_balanced():
 
 def test_eval_symmetry_holds_under_all_configs():
     """eval(BLUE) == -eval(BLACK) must hold with PST on, off, and default."""
-    from ai.search_config import strong_config, baseline_config
+    from ai.search_config import baseline_config, strong_config
     gs = make_gs(
         (3, 4, Color.BLUE, Animal.TIGER),
         (1, 5, Color.BLACK, Animal.WOLF),
@@ -147,6 +165,7 @@ def test_eval_symmetry_holds_under_all_configs():
 def test_pst_changes_eval():
     """Enabling the PST changes the score of an off-center vs central piece."""
     from dataclasses import replace
+
     from ai.search_config import strong_config
     cfg_on = strong_config()
     cfg_off = replace(cfg_on, use_pst=False)
@@ -173,6 +192,7 @@ def test_den_threat_symmetry():
 def test_den_threat_penalizes_undefended_approach():
     """An undefended enemy on our den approach lowers our eval (vs term off)."""
     from dataclasses import replace
+
     from ai.search_config import strong_config
     gs = make_gs(
         (3, 7, Color.BLACK, Animal.WOLF),   # blue den-approach (3,8) neighbor, undefended

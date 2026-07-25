@@ -13,17 +13,34 @@ import pygame
 
 import config as _config  # imported as module so _config.CELL_SIZE etc. are read dynamically
 from config import (
-    COLS, ROWS, BOARD_OFFSET_X, BOARD_OFFSET_Y,
-    TERRAIN_LAND, TERRAIN_RIVER, TERRAIN_TRAP, TERRAIN_DEN,
+    BOARD_OFFSET_X,
+    BOARD_OFFSET_Y,
+    CAPTURE_FLASH_MS,
+    COLOR_BG,
+    COLOR_BLACK_PIECE,
+    COLOR_BLUE_PIECE,
+    COLOR_DEN,
+    COLOR_GRID,
+    COLOR_HIGHLIGHT_MOVE,
+    COLOR_HIGHLIGHT_SELECT,
+    COLOR_LAND,
+    COLOR_PANEL_BG,
+    COLOR_RIVER,
+    COLOR_TEXT_LIGHT,
+    COLOR_TRAP,
+    COLOR_TRAPPED_BADGE,
+    COLS,
+    PANEL_WIDTH,
+    ROWS,
     TERRAIN,
-    COLOR_LAND, COLOR_RIVER, COLOR_TRAP, COLOR_DEN, COLOR_GRID,
-    COLOR_HIGHLIGHT_SELECT, COLOR_HIGHLIGHT_MOVE, COLOR_CAPTURE_FLASH,
-    COLOR_BLUE_PIECE, COLOR_BLACK_PIECE, COLOR_TEXT_LIGHT, COLOR_TEXT_DARK,
-    COLOR_PANEL_BG, COLOR_BG,
-    PANEL_WIDTH, CAPTURE_FLASH_MS,
+    TERRAIN_DEN,
+    TERRAIN_LAND,
+    TERRAIN_RIVER,
+    TERRAIN_TRAP,
     asset_path,
 )
-from engine.pieces import Animal, Color, piece_id_color, piece_id_animal, ANIMAL_NAMES
+from engine.pieces import Animal, Color, piece_id_animal, piece_id_color
+from engine.rules import effective_rank
 from gui.fonts import safe_sysfont
 
 # Terrain background colors
@@ -176,8 +193,19 @@ class Renderer:
         self._draw_board_terrain()
         self._draw_highlights(selected, legal_targets)
         self._draw_capture_flashes(tick_ms)
-        animating_squares = {(a["fc"], a["fr"]) for a in self._animations}
+        # Skip the animation's DESTINATION, not its source. The controller starts
+        # the animation and then applies the move, so by the time we draw, the
+        # piece already sits on the destination square — keying the skip set on
+        # the source drew a static copy there as well as the sliding one, a
+        # visible duplicate for the whole animation. Only still-running
+        # animations count, since expired ones are not pruned until after this.
+        animating_squares = {
+            (a["tc"], a["tr"]) for a in self._animations
+            if tick_ms < a["start_ms"] + a["duration_ms"]
+        }
         self._draw_pieces(state.board, selected, skip=animating_squares)
+        # After the pieces, so a capture target on an occupied square is visible.
+        self._draw_capture_targets(state.board, legal_targets)
         self._draw_animations(tick_ms)
         self._draw_grid()
         self._draw_board_labels()
@@ -259,11 +287,24 @@ class Renderer:
 
         # Legal move targets: semi-transparent green circle
         for (c, r) in legal_targets:
-            center = self._pixel_center(c, r)
             dot_surf = pygame.Surface((_config.CELL_SIZE, _config.CELL_SIZE), pygame.SRCALPHA)
             pygame.draw.circle(dot_surf, (100, 230, 100, 120), (_config.CELL_SIZE // 2, _config.CELL_SIZE // 2),
                                _config.CELL_SIZE // 4)
             self.surface.blit(dot_surf, self._cell_rect(c, r))
+
+    def _draw_capture_targets(self, board, legal_targets: set[tuple[int, int]]) -> None:
+        """Ring the legal targets that hold an enemy piece.
+
+        The green dot in `_draw_highlights` is drawn *under* the pieces, so on an
+        occupied square the piece sprite covers it and the square reads as "not a
+        legal move". Captures are exactly the moves a player most needs to see, so
+        they get a ring drawn on top instead.
+        """
+        for (c, r) in legal_targets:
+            if board.get(c, r) == 0:
+                continue
+            rect = self._cell_rect(c, r)
+            pygame.draw.rect(self.surface, COLOR_HIGHLIGHT_MOVE, rect, 4)
 
     # ------------------------------------------------------------------
     # Capture flash
@@ -306,7 +347,12 @@ class Renderer:
                     continue
                 color = piece_id_color(pid)
                 animal = piece_id_animal(pid)
-                self._draw_piece(c, r, color, animal, selected == (c, r))
+                # A piece standing in the enemy's trap fights at rank 0, so any
+                # adjacent enemy piece can take it. Nothing on the board used to
+                # say so — the badge always showed the raw rank — which is what
+                # makes "why can't my Elephant eat that Rat?" so hard to see.
+                self._draw_piece(c, r, color, animal, selected == (c, r),
+                                 effective_rank(pid, c, r))
 
     def _draw_outlined_text(
         self,
@@ -334,6 +380,7 @@ class Renderer:
         col: int, row: int,
         color: Color, animal: Animal,
         is_selected: bool,
+        effective_rank: int | None = None,
     ) -> None:
         rect = self._cell_rect(col, row)
         cx, cy = rect.centerx, rect.centery
@@ -366,17 +413,32 @@ class Renderer:
             outline_width=1,
         )
 
-        # Rank badge: small circle in top-left with number
+        # Rank badge: small circle in top-left with the piece's *fighting* rank.
         rank = int(animal)
+        shown_rank = rank if effective_rank is None else effective_rank
+        is_trapped = shown_rank != rank
         badge_x = rect.x + 3
         badge_y = rect.y + 3
         badge_r = 8
-        badge_color = (60, 120, 220) if color == Color.BLUE else (50, 50, 60)
-        pygame.draw.circle(self.surface, badge_color, (badge_x + badge_r, badge_y + badge_r), badge_r)
-        pygame.draw.circle(self.surface, (200, 200, 200), (badge_x + badge_r, badge_y + badge_r), badge_r, 1)
-        rank_surf = self._font_small.render(str(rank), True, (255, 255, 255))
-        self.surface.blit(rank_surf, (badge_x + badge_r - rank_surf.get_width() // 2,
-                                      badge_y + badge_r - rank_surf.get_height() // 2))
+        centre = (badge_x + badge_r, badge_y + badge_r)
+        if is_trapped:
+            # Red badge reading 0: this piece is trapped and anything next to it
+            # can capture it, whatever its normal rank.
+            badge_color = COLOR_TRAPPED_BADGE
+            ring_color = (255, 235, 120)
+            ring_width = 2
+        else:
+            badge_color = (60, 120, 220) if color == Color.BLUE else (50, 50, 60)
+            ring_color = (200, 200, 200)
+            ring_width = 1
+        pygame.draw.circle(self.surface, badge_color, centre, badge_r)
+        pygame.draw.circle(self.surface, ring_color, centre, badge_r, ring_width)
+        rank_surf = self._font_small.render(str(shown_rank), True, (255, 255, 255))
+        self.surface.blit(rank_surf, (centre[0] - rank_surf.get_width() // 2,
+                                      centre[1] - rank_surf.get_height() // 2))
+        if is_trapped:
+            # Outline the whole square too, so it reads at a glance.
+            pygame.draw.rect(self.surface, COLOR_TRAPPED_BADGE, rect, 3)
 
     # ------------------------------------------------------------------
     # Animations
@@ -398,6 +460,17 @@ class Renderer:
 
     def has_active_animation(self, tick_ms: int) -> bool:
         return any(tick_ms < a["start_ms"] + a["duration_ms"] for a in self._animations)
+
+    def clear_transient_effects(self) -> None:
+        """Drop in-flight animations and capture flashes.
+
+        Call on any discontinuity — new game, return to menu, undo — so effects
+        from the previous position do not bleed into the new one. Capture flashes
+        need this as much as animations: they are only pruned lazily while
+        drawing the board, so they survive a spell on the menu screen.
+        """
+        self._animations.clear()
+        self._flashes.clear()
 
     def _draw_animations(self, tick_ms: int) -> None:
         active: list[dict] = []

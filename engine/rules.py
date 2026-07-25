@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from config import (
-    TERRAIN, TERRAIN_TRAP, TERRAIN_RIVER,
-    DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE,
+    DEN_BLACK,
+    DEN_BLUE,
+    TERRAIN,
+    TERRAIN_RIVER,
+    TRAPS_BLACK,
+    TRAPS_BLUE,
 )
-from engine.pieces import Animal, Color, piece_id_color, piece_id_animal, piece_id_rank
+from engine.pieces import Animal, Color, piece_id_animal, piece_id_color, piece_id_rank
 
 
 def _opponent_traps(color: Color) -> set[tuple[int, int]]:
@@ -28,50 +32,59 @@ def effective_rank(pid: int, col: int, row: int) -> int:
 def can_capture(attacker_pid: int, defender_pid: int,
                 atk_col: int, atk_row: int,
                 def_col: int, def_row: int,
-                board) -> bool:
+                board=None) -> bool:
     """Return True if attacker at (atk_col, atk_row) can capture defender at (def_col, def_row).
 
-    Rules:
-    - Must be different colors.
-    - Rat in water cannot capture Elephant on land (or vice versa across boundary).
-    - Rat (on land) can capture Elephant (on land).
-    - Otherwise: attacker effective_rank >= defender effective_rank.
-    - Special: Rat can capture Rat regardless of water boundary as long as both are
-      on the same terrain type (water-water or land-land).
+    Rules, applied in this order:
+
+    1. Must be different colors.
+    2. Captures may not cross the water/land boundary: a piece standing in the
+       river and a piece on land can never capture one another (this is what
+       makes a Rat in the river invulnerable to land pieces, and what stops a
+       Rat in the river from taking an Elephant on the bank).
+    3. A defender standing in the *attacker's* traps has effective rank 0 and is
+       therefore capturable by **any** enemy piece. This overrides the
+       Rat/Elephant exception, so an Elephant may take a trapped Rat.
+    4. On equal terrain, with a defender that still holds its real rank:
+       Rat beats Elephant, Elephant cannot take Rat, otherwise the attacker's
+       rank must be >= the defender's.
+
+    The trap weakens a piece for *defence only* — the attacker always fights at
+    its real rank, so a piece standing in the enemy's traps is vulnerable but
+    not disarmed. ``board`` is unused; it is kept for call-site compatibility.
     """
     atk_color = piece_id_color(attacker_pid)
     def_color = piece_id_color(defender_pid)
 
-    # Must be enemies
+    # (1) Must be enemies.
     if atk_color == def_color:
         return False
-
-    atk_animal = piece_id_animal(attacker_pid)
-    def_animal = piece_id_animal(defender_pid)
 
     atk_in_water = TERRAIN[atk_col][atk_row] == TERRAIN_RIVER
     def_in_water = TERRAIN[def_col][def_row] == TERRAIN_RIVER
 
-    # Rat-specific cross-boundary rules
-    if atk_animal == Animal.RAT or def_animal == Animal.RAT:
-        # A piece in water is invulnerable to attacks from land pieces
-        # (and vice versa) — except rat vs rat on same terrain type
-        if atk_in_water != def_in_water:
-            return False
-        # Both on same terrain: Rat can capture Rat freely
-        if atk_animal == Animal.RAT and def_animal == Animal.RAT:
-            return True
-        # Rat on land can capture Elephant on land
-        if atk_animal == Animal.RAT and def_animal == Animal.ELEPHANT:
-            return not atk_in_water  # attacker must be on land
-        # Elephant can NOT capture Rat (Rat beats Elephant in rank hierarchy)
-        if atk_animal == Animal.ELEPHANT and def_animal == Animal.RAT:
-            return False
+    # (2) No capture across the water/land boundary, in either direction.
+    if atk_in_water != def_in_water:
+        return False
 
-    # General rank comparison using effective ranks
-    atk_eff = effective_rank(attacker_pid, atk_col, atk_row)
-    def_eff = effective_rank(defender_pid, def_col, def_row)
-    return atk_eff >= def_eff
+    # (3) Defender in the attacker's trap has rank 0 — anyone may take it.
+    #     Trap squares are never river squares, so this cannot bypass rule (2).
+    if effective_rank(defender_pid, def_col, def_row) == 0:
+        return True
+
+    # (4) Rank comparison with the Rat/Elephant exception. The attacker uses its
+    #     real rank: standing in an enemy trap does not reduce its striking power.
+    atk_animal = piece_id_animal(attacker_pid)
+    def_animal = piece_id_animal(defender_pid)
+
+    if atk_animal == Animal.RAT and def_animal == Animal.ELEPHANT:
+        # Rat beats Elephant. An Elephant can never stand in the river, so
+        # rule (2) has already guaranteed both pieces are on land here.
+        return True
+    if atk_animal == Animal.ELEPHANT and def_animal == Animal.RAT:
+        return False  # Elephant cannot take an untrapped Rat
+
+    return piece_id_rank(attacker_pid) >= piece_id_rank(defender_pid)
 
 
 def is_jump_blocked(fc: int, fr: int, tc: int, tr: int, board) -> bool:

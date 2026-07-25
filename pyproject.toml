@@ -1,0 +1,43 @@
+# Tooling configuration. pytest, pytest-cov and ruff were already pinned in
+# requirements.txt but ran entirely on defaults, with no config file anywhere in
+# the repo — so "ruff check ." enforced nothing in particular and the line length
+# the code is actually written to was undocumented.
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"          # code uses PEP 604 "X | None" in runtime annotations
+extend-exclude = ["build", "dist", "release", "venv"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "W",      # pycodestyle warnings
+    "I",      # import sorting
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # comprehensions
+    "RUF",    # ruff-specific
+]
+ignore = [
+    "E501",    # line length is enforced by the formatter, not the linter
+    "B008",    # function call in default argument: intentional for value tables
+    "RUF002",  # "2x3" is clearer written with a multiplication sign in prose
+    "RUF003",  # ditto for en dashes in comments
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests reach into engine internals deliberately, and assert-heavy style is fine.
+"tests/*" = ["B011"]
+# One-shot procedural art script, run by hand to regenerate gui/assets. Its
+# drawing helpers keep unused corner coordinates for readability.
+"generate_assets.py" = ["F841", "B007"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# -q keeps CI output readable; --tb=short makes engine failures diagnosable
+# without dumping whole search stacks.
+addopts = "-q --tb=short"
+markers = [
+    "slow: full AI-vs-AI games and self-play; minutes rather than seconds",
+]

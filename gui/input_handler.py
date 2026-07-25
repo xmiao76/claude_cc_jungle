@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import config as _config
-from config import COLS, ROWS, BOARD_OFFSET_X, BOARD_OFFSET_Y
+from config import BOARD_OFFSET_X, BOARD_OFFSET_Y, COLS, ROWS
 from engine.board import Move
 from engine.pieces import Color, piece_id_color
 

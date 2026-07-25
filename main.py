@@ -1,6 +1,7 @@
 """Jungle board game - entry point."""
 
 import pygame
+
 import config
 from controller import Controller
 
@@ -35,7 +36,9 @@ def main() -> None:
 
     # Set window icon if available
     import os
-    icon_path = config.asset_path(os.path.join("gui", "assets", "tiles", "icon.ico"))
+    # icon.png is what generate_assets.py actually writes; the old code looked
+    # for an icon.ico that is never produced, so this block never ran.
+    icon_path = config.asset_path(os.path.join("gui", "assets", "tiles", "icon.png"))
     if os.path.exists(icon_path):
         try:
             icon = pygame.image.load(icon_path)

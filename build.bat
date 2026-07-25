@@ -4,6 +4,7 @@ REM  Jungle board game - Windows build script
 REM  Produces: release\jungle_game.exe (standalone, no Python required)
 REM            release\jungle_game.zip (exe + README for distribution)
 REM ==========================================================================
+setlocal
 
 echo.
 echo =========================================
@@ -11,18 +12,28 @@ echo  Jungle Board Game - Build Script
 echo =========================================
 echo.
 
-REM Activate virtual environment
-call venv\Scripts\activate.bat
+REM Prefer a project venv, but fall back to whatever python is on PATH.
+REM The old script called `venv\Scripts\activate.bat` unconditionally and aborted
+REM if it was missing, which meant the build could not run on a machine where the
+REM dependencies were installed globally.
+if exist venv\Scripts\activate.bat (
+    echo Using project venv.
+    call venv\Scripts\activate.bat
+) else (
+    echo No venv found - using python from PATH.
+)
+
+set PY=python
+%PY% -c "import pygame, PyInstaller" >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Could not activate venv. Run setup first:
-    echo   python -m venv venv
-    echo   venv\Scripts\pip install -r requirements.txt
+    echo ERROR: pygame and/or PyInstaller are not importable with %PY%.
+    echo   python -m pip install -r requirements.txt
     exit /b 1
 )
 
-REM Run tests before building
+REM Run tests before building. Options come from pyproject.toml.
 echo [1/5] Running tests...
-pytest tests\ -v --tb=short -q
+%PY% -m pytest tests
 if errorlevel 1 (
     echo.
     echo ERROR: Tests failed. Fix failures before packaging.
@@ -35,20 +46,23 @@ REM Clean previous build artifacts
 echo [2/5] Cleaning previous build...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
-if exist jungle_game.spec del jungle_game.spec
+if exist jungle_game.spec del /q jungle_game.spec
 echo   Done.
 echo.
 
-REM Run PyInstaller
+REM Package. One --add-data for gui\assets is enough: PyInstaller copies the
+REM directory tree, so the old per-subfolder arguments bundled tiles, pieces and
+REM sounds three times each. --icon brands the exe (see generate_assets.py, which
+REM writes icon.ico next to icon.png).
 echo [3/5] Packaging with PyInstaller...
-PyInstaller ^
+%PY% -m PyInstaller ^
     --onefile ^
     --windowed ^
+    --noconfirm ^
+    --clean ^
     --name jungle_game ^
+    --icon "gui\assets\tiles\icon.ico" ^
     --add-data "gui\assets;gui\assets" ^
-    --add-data "gui\assets\tiles;gui\assets\tiles" ^
-    --add-data "gui\assets\pieces;gui\assets\pieces" ^
-    --add-data "gui\assets\sounds;gui\assets\sounds" ^
     main.py
 
 if errorlevel 1 (

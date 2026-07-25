@@ -10,15 +10,18 @@ Zobrist hashing is updated incrementally on make_move / unmake_move.
 from __future__ import annotations
 
 import random
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 from config import (
-    COLS, ROWS, TERRAIN, TERRAIN_RIVER,
-    DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE, RIVER_SQUARES,
+    COLS,
+    ROWS,
+    TERRAIN,
 )
 from engine.pieces import (
-    Animal, Color, STARTING_POSITIONS,
-    make_piece_id, piece_id_color, piece_id_animal, piece_id_rank,
+    STARTING_POSITIONS,
+    Color,
+    make_piece_id,
+    piece_id_color,
 )
 
 # ---------------------------------------------------------------------------
@@ -82,9 +85,40 @@ class Board:
             self.hash ^= _ZOBRIST[c][r][_pid_index(pid)]
             self._piece_positions[int(color)][pid] = (c, r)
 
+    def place(self, c: int, r: int, pid: int) -> None:
+        """Put piece *pid* on (c, r), keeping tracking and the Zobrist hash in sync.
+
+        This is the supported way to build an arbitrary position — tests,
+        benchmarks and puzzle setups. Writing ``_grid`` directly leaves ``hash``
+        stale at 0, which silently aliases every hand-built position to the same
+        transposition-table key.
+        """
+        if pid == 0:
+            raise ValueError("cannot place an empty square")
+        if self._grid[c][r] != 0:
+            raise ValueError(f"square {(c, r)} already holds piece {self._grid[c][r]}")
+        color = 0 if pid > 0 else 1
+        if pid in self._piece_positions[color]:
+            raise ValueError(f"piece {pid} is already on the board")
+        self._grid[c][r] = pid
+        self.hash ^= _ZOBRIST[c][r][_pid_index(pid)]
+        self._piece_positions[color][pid] = (c, r)
+
     # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
+
+    @property
+    def grid(self) -> list[list[int]]:
+        """The raw column-major grid, for hot loops that index many squares.
+
+        Read-only by convention: `get`/`place`/`make_move` are the supported way
+        to change the board, because they also maintain the Zobrist hash and the
+        piece-position index. Exposed because evaluation indexes hundreds of
+        squares per call and a method call per square is a measurable cost when
+        evaluation is most of search time.
+        """
+        return self._grid
 
     def get(self, c: int, r: int) -> int:
         return self._grid[c][r]
@@ -160,7 +194,7 @@ class Board:
     # Helpers
     # ------------------------------------------------------------------
 
-    def copy(self) -> "Board":
+    def copy(self) -> Board:
         b = Board()
         b._grid = [col[:] for col in self._grid]
         b.hash = self.hash

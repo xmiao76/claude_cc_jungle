@@ -1,18 +1,8 @@
 """Tests for repetition / 50-move tracking in GameState."""
 
-from engine.board import Board
 from engine.game_state import GameState
-from engine.pieces import Animal, Color, make_piece_id
-
-
-def make_gs(*piece_specs) -> GameState:
-    gs = GameState()
-    gs.board = Board()
-    for (c, r, color, animal) in piece_specs:
-        pid = make_piece_id(color, animal)
-        gs.board._grid[c][r] = pid
-        gs.board._piece_positions[int(color)][pid] = (c, r)
-    return gs
+from engine.pieces import Animal, Color
+from tests.helpers import make_gs
 
 
 def _step(gs: GameState, fc, fr, tc, tr) -> None:

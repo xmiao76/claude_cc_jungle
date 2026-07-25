@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from config import (
-    COLS, ROWS, TERRAIN, TERRAIN_RIVER,
-    DEN_BLACK, DEN_BLUE,
+    COLS,
+    DEN_BLACK,
+    DEN_BLUE,
+    ROWS,
+    TERRAIN,
+    TERRAIN_RIVER,
 )
 from engine.board import Board, Move
-from engine.pieces import Animal, Color, piece_id_color, piece_id_animal
+from engine.pieces import Animal, Color, piece_id_animal, piece_id_color
 from engine.rules import can_capture, is_jump_blocked
 
 # Cardinal directions

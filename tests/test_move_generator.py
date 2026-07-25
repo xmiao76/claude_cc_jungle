@@ -1,28 +1,15 @@
 """Tests for move generation covering all special Jungle movement rules."""
 
-import pytest
+from config import DEN_BLACK, DEN_BLUE
 from engine.board import Board, Move
 from engine.game_state import GameState
-from engine.pieces import Animal, Color, make_piece_id
 from engine.move_generator import generate_legal_moves
-from config import DEN_BLUE, DEN_BLACK
-
+from engine.pieces import Animal, Color
+from tests.helpers import empty_board, place
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def empty_board() -> Board:
-    b = Board()
-    return b
-
-
-def place(board: Board, col: int, row: int, color: Color, animal: Animal) -> int:
-    pid = make_piece_id(color, animal)
-    board._grid[col][row] = pid
-    board._piece_positions[int(color)][pid] = (col, row)
-    return pid
-
 
 def moves_from(board: Board, color: Color, col: int, row: int) -> list[Move]:
     return [m for m in generate_legal_moves(board, color) if m.fc == col and m.fr == row]
@@ -163,7 +150,6 @@ def test_rat_enters_river():
 # ---------------------------------------------------------------------------
 
 def test_non_rat_cannot_enter_river():
-    b = empty_board()
     for animal in [Animal.CAT, Animal.DOG, Animal.WOLF, Animal.LEOPARD,
                    Animal.TIGER, Animal.LION, Animal.ELEPHANT]:
         b2 = empty_board()

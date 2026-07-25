@@ -12,7 +12,6 @@ from __future__ import annotations
 from engine.board import Move
 from engine.game_state import GameState
 
-
 _BOOK: dict[int, Move] | None = None
 
 

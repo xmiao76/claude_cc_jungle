@@ -1,20 +1,11 @@
 """Tests for ai/see.py — Static Exchange Evaluation."""
 
-from engine.board import Board, Move
-from engine.game_state import GameState
-from engine.pieces import Animal, Color, make_piece_id
 from ai.see import see_capture
-from config import PIECE_VALUES
-
-
-def make_gs(*piece_specs) -> GameState:
-    gs = GameState()
-    gs.board = Board()
-    for (c, r, color, animal) in piece_specs:
-        pid = make_piece_id(color, animal)
-        gs.board._grid[c][r] = pid
-        gs.board._piece_positions[int(color)][pid] = (c, r)
-    return gs
+from config import PIECE_VALUES_TUNED as VALUES
+from engine.board import Move
+from engine.game_state import GameState
+from engine.pieces import Animal, Color
+from tests.helpers import make_gs
 
 
 def _find(gs: GameState, fc, fr, tc, tr) -> Move:
@@ -31,31 +22,38 @@ def test_see_positive_for_undefended_capture():
     )
     gs.turn = Color.BLUE
     move = _find(gs, 3, 4, 3, 5)
-    assert see_capture(gs.board, move) == PIECE_VALUES[int(Animal.WOLF)]
+    assert see_capture(gs.board, move) == VALUES[int(Animal.WOLF)]
 
 
 def test_see_negative_for_defended_capture():
     """Tiger captures Wolf, but defending Lion can recapture — net loss."""
     gs = make_gs(
-        (3, 4, Color.BLUE, Animal.TIGER),     # 600
-        (3, 5, Color.BLACK, Animal.WOLF),     # 400 - victim
-        (3, 6, Color.BLACK, Animal.LION),     # 700 - recapturer
+        (3, 4, Color.BLUE, Animal.TIGER),     # attacker
+        (3, 5, Color.BLACK, Animal.WOLF),     # victim
+        (3, 6, Color.BLACK, Animal.LION),     # recapturer, outranks the Tiger
     )
     gs.turn = Color.BLUE
     move = _find(gs, 3, 4, 3, 5)
-    # Net: +400 (Wolf) -600 (Tiger) = -200
+    # Net: +Wolf -Tiger, and the Tiger costs more than the Wolf.
     assert see_capture(gs.board, move) < 0
 
 
 def test_see_zero_for_equal_trade():
+    """Take a Wolf, lose our Wolf to the recapture: net zero.
+
+    The recapturer only has to outrank our Wolf; its own value never enters the
+    swap-off because it is not captured. (This used to use a second Black Wolf as
+    the defender, which is not a position Jungle can reach — each side has
+    exactly one of each animal.)
+    """
     gs = make_gs(
-        (3, 4, Color.BLUE, Animal.WOLF),
-        (3, 5, Color.BLACK, Animal.WOLF),
-        (3, 6, Color.BLACK, Animal.WOLF),
+        (3, 4, Color.BLUE, Animal.WOLF),        # attacker
+        (3, 5, Color.BLACK, Animal.WOLF),       # victim, same animal
+        (3, 6, Color.BLACK, Animal.LEOPARD),    # rank 5 - recaptures
     )
     gs.turn = Color.BLUE
     move = _find(gs, 3, 4, 3, 5)
-    # +400 -400 = 0
+    # +Wolf -our Wolf = 0, whatever the table prices a Wolf at
     assert see_capture(gs.board, move) == 0
 
 

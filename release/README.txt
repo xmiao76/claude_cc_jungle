@@ -1,17 +1,55 @@
 JUNGLE - THE BOARD GAME
 =======================
-Version 1.3 | Windows Desktop
+Version 1.3.1 | Windows Desktop
 
 
 AUTHORSHIP
 ----------
-Designed and implemented by an AI coding agent: Anthropic's Claude Opus 4.8
-(model "claude-opus-4-8"), running at "max" effort, via Claude Code (Anthropic's
+Designed and implemented by AI coding agents via Claude Code (Anthropic's
 official command-line coding agent). The architecture, gameplay logic, AI engine,
 GUI, automated tests, and packaging were all generated programmatically; no
 third-party code was incorporated.
-  Initial generation : 2026-04-23
-  Latest engine update: 2026-06-19 (Claude Opus 4.8, max effort, via Claude Code)
+  Initial generation   : 2026-04-23 (Claude Opus 4.8, model "claude-opus-4-8",
+                         max effort, via Claude Code)
+  1.2-1.3 engine work  : 2026-06-19 (Claude Opus 4.8, max effort, via Claude Code)
+  1.3.1 rules + engine : 2026-07-24 (Claude Opus 5, model "claude-opus-5",
+                         1M-context variant, via Claude Code)
+
+WHAT'S NEW IN 1.3.1
+-------------------
+  A rules correction and a measurably stronger engine.
+
+  - FIXED: your Elephant could not capture an enemy Rat that had walked into
+    your own trap. A piece in your trap has rank 0 and must be capturable by
+    anything next to it, but the Elephant-cannot-eat-Rat exception was applied
+    first and never consulted the trap. Every other animal was unaffected.
+    The same bug made it worse than a missed capture: the trapped Rat could
+    still eat the Elephant that could not eat it.
+  - A trapped piece is now marked on the board: its rank badge turns red and
+    reads 0, and its square is outlined, so you can see it has lost its rank.
+  - Capture targets are easier to see. The green marker for a square that holds
+    an enemy piece is now drawn on top of that piece instead of behind it.
+  - The AI plays substantially stronger, and searches about a ply deeper in the
+    same time. Measured by self-play at an equal time budget:
+      +76 Elo against this same engine with 1.3.1's search changes switched off
+        (60 games), and
+      +182 Elo against the engine with all optional enhancements disabled
+        (100 games, 95% confidence interval +115 to +264).
+    Several of the fixes below apply unconditionally, so they improve both sides
+    of those comparisons and are not captured by either figure.
+      Behind that: the quiescence search was throwing away free material because
+      it compared a piece's rank against a centipawn margin; an evaluation term
+      was mathematically guaranteed to be zero in every position; two conflicting
+      mate scales meant a detected win could outrank a real forced win; late-move
+      reductions were reducing the game-winning den entry; and the transposition
+      table never expired stale entries.
+  - Easy and Medium can no longer stall the window on a difficult position.
+  - Fixed a rare crash-and-hang: if you pressed Escape or restarted while the AI
+    was thinking, its result could be applied to the new position and corrupt
+    the board. A crashed search also used to leave the game thinking forever.
+  - The download is half the size (15 MB, was 29 MB): the packaging step was
+    bundling every image and sound three times.
+  - The window and executable now show the game's icon.
 
 WHAT'S NEW IN 1.3
 -----------------
@@ -86,6 +124,7 @@ TERRAIN
   Green squares   : Normal land
   Blue squares    : Rivers — only the Rat can swim in rivers
   Brown squares   : Traps — any enemy piece entering your trap has rank 0 (capturable by anyone)
+                    A piece standing in a trap shows a red 0 badge and an outlined square
   Gold squares    : Dens — move any piece here to win (cannot enter your own den)
 
 
@@ -103,6 +142,7 @@ CONTROLS
 --------
   Click your piece     - Selects the piece (gold border appears)
   Green dots           - Show all legal move destinations
+  Green outlined square- A legal destination holding an enemy piece you can capture
   Click a green dot    - Move the selected piece there
   Click elsewhere      - Deselect the piece
   ESC key              - Return to the main menu
@@ -119,9 +159,13 @@ MAIN MENU
 
 DIFFICULTY LEVELS
 -----------------
-  Easy    - Looks 2 moves ahead. Good for learning.
-  Medium  - Looks 4 moves ahead. A real challenge.
-  Hard    - Uses up to 2-second search. Plays a strong strategic game.
+  Easy    - Looks 3 moves ahead. Good for learning.
+  Medium  - Looks 5 moves ahead. A real challenge.
+  Hard    - Thinks for up to 2 seconds per move and searches as deep as it can
+            in that time. Plays a strong strategic game.
+
+  (Easy and Medium are fixed-depth, so they respond almost instantly. The
+   figures above are the search depths the game actually uses.)
 
 
 AI VS AI MODE
@@ -149,6 +193,9 @@ Rule interpretations used in this implementation:
   - Rat in water cannot capture Elephant on land (and vice versa)
   - Rat in water cannot be captured by land pieces
   - Own traps do NOT reduce your own pieces' rank
+  - A trap reduces rank for DEFENCE only: a piece standing in an enemy trap can
+    be captured by any adjacent enemy piece (including an Elephant taking a Rat),
+    but it still attacks at its full rank
   - Entering your own den is illegal
   - Den entry wins immediately
   - Player with no legal moves loses

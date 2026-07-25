@@ -1,1 +1,30 @@
-When the opponent's rat entered my trap, my elephant beside the trap didn't dare to attack her. This is a defect to be fixed.
+FIXED (see tests/test_rules.py and tests/test_perft.py)
+
+  "When the opponent's rat entered my trap, my elephant beside the trap didn't
+   dare to attack her. This is a defect to be fixed."
+
+Root cause: engine/rules.py:can_capture rejected Elephant-vs-Rat unconditionally,
+in a branch that ran *before* the trap's rank-0 rule was ever consulted. Every
+other animal already worked, because they fell through to the rank comparison
+where the trapped Rat's effective rank of 0 made the capture legal. Only the
+Elephant hit the early return.
+
+It was worse than a missed capture: the mirror call was allowed, so the trapped
+Rat could eat the Elephant that could not eat it. The Elephant was hanging.
+
+The rule now reads: the trap zeroes the DEFENDER's rank only. A piece standing in
+the enemy's traps can be captured by any adjacent enemy piece, Elephant included,
+but it still attacks at its full rank — vulnerable, not disarmed. The Rat-beats-
+Elephant exception applies only to a Rat that still holds its real rank.
+
+The board now also shows this: a trapped piece gets a red rank-0 badge and a red
+outline, and a capture target that holds a piece gets a green ring drawn on top of
+the piece (the old green dot was drawn underneath it, so captures were nearly
+invisible).
+
+--------------------------------------------------------------------------------
+No open issues.
+
+Anything found later goes here with: what you saw, which side you were playing,
+and the square coordinates if you have them. Columns are A-G left to right, rows
+1-9 top to bottom, as labelled on the board.

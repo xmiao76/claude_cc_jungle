@@ -15,24 +15,32 @@ from __future__ import annotations
 
 import time
 
+from ai import opening_book
+from ai.evaluator import _INF, evaluate
+from ai.search_config import SearchConfig, piece_values, strong_config
+from ai.see import see_capture
+from ai.transposition import TT_EXACT, TT_LOWER, TT_UPPER, TranspositionTable
+from config import (
+    AI_DEPTH_EASY,
+    AI_DEPTH_MEDIUM,
+    AI_FIXED_DEPTH_CAP_MS,
+    AI_TIME_HARD_MS,
+    ASPIRATION_DELTA,
+    ASPIRATION_MIN_DEPTH,
+    DEN_BLACK,
+    DEN_BLUE,
+    EVAL_WEIGHTS,
+    LMR_MIN_DEPTH,
+    LMR_MOVES_BEFORE,
+    NMP_MIN_DEPTH,
+    NMP_MIN_PIECES,
+    NMP_REDUCTION,
+    QUIESCENCE_MAX_PLY,
+    USE_OPENING_BOOK,
+)
 from engine.board import Move
 from engine.game_state import GameState
-from engine.move_generator import generate_capture_moves, generate_noisy_moves
 from engine.pieces import Color
-from ai.evaluator import evaluate, _INF
-from ai.transposition import TranspositionTable, TT_EXACT, TT_LOWER, TT_UPPER
-from ai.see import see_capture
-from ai import opening_book
-from ai.search_config import SearchConfig, strong_config
-from config import (
-    AI_DEPTH_EASY, AI_DEPTH_MEDIUM, AI_TIME_HARD_MS,
-    QUIESCENCE_MAX_PLY, EVAL_WEIGHTS,
-    NMP_REDUCTION, NMP_MIN_DEPTH, NMP_MIN_PIECES,
-    LMR_MIN_DEPTH, LMR_MOVES_BEFORE,
-    ASPIRATION_DELTA, ASPIRATION_MIN_DEPTH,
-    USE_OPENING_BOOK,
-    DEN_BLACK, DEN_BLUE,
-)
 
 _MATE = _INF - 1000
 _MAX_PLY = 64
@@ -43,6 +51,11 @@ _MATE_BOUND = _MATE - _MAX_PLY  # any |score| >= bound is treated as mate-distan
 # iteration still runs to the hard limit and its partial result is kept, so this
 # only skips starts that would barely progress. The hard limit bounds wall-clock.
 _NEXT_ITER_FACTOR = 1.5
+
+# History scores are capped well below the killer-move band (-48_000 .. -50_000)
+# in `_order_moves`, so a well-travelled quiet move can never outrank a killer or
+# a winning capture.
+_HISTORY_MAX = 40_000
 
 
 def _mate_in(ply: int) -> int:
@@ -79,7 +92,10 @@ class AIPlayer:
         self.color = color
         self.difficulty = difficulty
         self.cfg = cfg or strong_config()
-        self._tt = TranspositionTable()
+        # Evaluation, SEE and delta pruning must all price captures with the
+        # same table, so resolve it once from the config.
+        self._values = piece_values(self.cfg)
+        self._tt = TranspositionTable(use_aging=self.cfg.use_tt_aging)
         self._nodes = 0
         self._last_depth = 0          # last fully-completed search depth (for bench)
         self._seldepth = 0            # max ply reached including quiescence
@@ -87,6 +103,10 @@ class AIPlayer:
         self._start_time = 0.0
         self._time_limit = 0.0
         self._stopped = False
+        # Set from another thread to abort the search early (see `request_stop`).
+        # A plain bool is enough: assignment and reads are atomic in CPython, and
+        # a late read only costs one extra batch of nodes.
+        self._stop_requested = False
         self._best_move_root: Move | None = None
         # Killer moves: two non-capture beta-cutoff moves per ply.
         self._killers: list[list[Move | None]] = [[None, None] for _ in range(_MAX_PLY)]
@@ -94,12 +114,27 @@ class AIPlayer:
         self._history: dict[tuple[int, int, int, int], int] = {}
         # Counter-move heuristic: prev_move_tuple -> reply move.
         self._counter: dict[tuple[int, int, int, int], Move] = {}
+        # Root move -> score from the last completed iteration. Iterative
+        # deepening's whole advantage is that the previous iteration already
+        # ranked the moves; promoting only the single TT move throws away the
+        # rest of that ranking.
+        self._root_scores: dict[tuple[int, int, int, int], int] = {}
 
     # ------------------------------------------------------------------
     # Public entry
     # ------------------------------------------------------------------
 
+    def request_stop(self) -> None:
+        """Ask a running search to abort as soon as it notices.
+
+        Safe to call from another thread. The searching thread checks this on the
+        same schedule as the clock, so it returns promptly. The result of an
+        aborted search must be discarded by the caller.
+        """
+        self._stop_requested = True
+
     def get_best_move(self, state: GameState, time_budget_ms: int = AI_TIME_HARD_MS) -> Move | None:
+        self._stop_requested = False
         moves = state.legal_moves()
         if not moves:
             return None
@@ -118,12 +153,19 @@ class AIPlayer:
         self._stopped = False
         self._start_time = time.perf_counter()
         self._reset_search_heuristics()
+        # Entries from previous moves become replaceable, so a stale deep
+        # result cannot permanently squat on a slot this search needs.
+        self._tt.new_search()
 
+        # Easy and Medium are *depth*-limited, not time-limited: that is what
+        # gives them their consistent feel. They still get a wall-clock watchdog,
+        # generous enough never to fire in normal play, so a pathological
+        # position cannot freeze the UI with no way to abort.
         if self.difficulty == 0:
-            self._time_limit = 999_999.0
+            self._time_limit = AI_FIXED_DEPTH_CAP_MS / 1000.0
             return self._search_fixed_depth(state, AI_DEPTH_EASY)
         if self.difficulty == 1:
-            self._time_limit = 999_999.0
+            self._time_limit = AI_FIXED_DEPTH_CAP_MS / 1000.0
             return self._search_fixed_depth(state, AI_DEPTH_MEDIUM)
         self._time_limit = time_budget_ms / 1000.0
         return self._search_iterative_deepening(state)
@@ -133,7 +175,11 @@ class AIPlayer:
     # ------------------------------------------------------------------
 
     def _search_fixed_depth(self, state: GameState, depth: int) -> Move | None:
-        self._best_move_root = None
+        # Seed with a legal move so an aborted search — watchdog or `request_stop`
+        # — still returns something playable instead of None, which the caller
+        # cannot act on.
+        moves = state.legal_moves()
+        self._best_move_root = moves[0] if moves else None
         self._negamax_root(state, depth, -_INF, _INF)
         self._last_depth = depth
         return self._best_move_root
@@ -198,6 +244,10 @@ class AIPlayer:
         return best_move
 
     def _time_expired(self) -> bool:
+        # An external stop request unwinds the search through the same path as a
+        # clock expiry, so every existing abort check honours it.
+        if self._stop_requested:
+            return True
         return (time.perf_counter() - self._start_time) >= self._time_limit
 
     def _reset_search_heuristics(self) -> None:
@@ -206,6 +256,7 @@ class AIPlayer:
             slots[1] = None
         self._history.clear()
         self._counter.clear()
+        self._root_scores.clear()
 
     def _age_history(self) -> None:
         for k in list(self._history.keys()):
@@ -215,12 +266,51 @@ class AIPlayer:
             else:
                 self._history[k] = v
 
+    def _history_key(self, side: int, move: Move):
+        """Key for the history table.
+
+        Including the side matters: without it Blue and Black share one entry for
+        every (from, to) pair they can both play, so one side's good quiet moves
+        raise the other side's score for the same squares.
+        """
+        if self.cfg.use_side_history:
+            return (side, move.fc, move.fr, move.tc, move.tr)
+        return (move.fc, move.fr, move.tc, move.tr)
+
+    def _history_bonus(self, side: int, move: Move, depth: int) -> None:
+        """Reward a quiet move that caused a beta cutoff."""
+        key = self._history_key(side, move)
+        value = self._history.get(key, 0) + depth * depth
+        if self.cfg.use_side_history and value > _HISTORY_MAX:
+            # Uncapped history eventually crosses the killer band (-48k..-50k) and
+            # then the winning-capture band (-100k), inverting the whole ordering.
+            value = _HISTORY_MAX
+        self._history[key] = value
+
+    def _history_malus(self, side: int, moves: list[Move], depth: int) -> None:
+        """Penalise the quiet moves that were tried at this node and did not cut off.
+
+        Bonus-only history can only ever say "this move was good somewhere"; it
+        never learns that a move keeps failing. The malus is what makes the score
+        a comparison rather than a tally.
+        """
+        if not self.cfg.use_side_history:
+            return
+        penalty = depth * depth
+        for m in moves:
+            key = self._history_key(side, m)
+            value = self._history.get(key, 0) - penalty
+            if value < -_HISTORY_MAX:
+                value = -_HISTORY_MAX
+            self._history[key] = value
+
     # ------------------------------------------------------------------
     # Move ordering
     # ------------------------------------------------------------------
 
     def _order_moves(self, moves: list[Move], tt_best: Move | None,
-                     ply: int, prev_move: Move | None, board) -> list[Move]:
+                     ply: int, prev_move: Move | None, board,
+                     side: int = 0) -> list[Move]:
         if not moves:
             return moves
         killers = self._killers[ply] if 0 <= ply < _MAX_PLY else (None, None)
@@ -241,7 +331,7 @@ class AIPlayer:
                 victim = abs(m.captured)
                 attacker = abs(board.get(m.fc, m.fr))
                 if use_see:
-                    see_val = see_capture(board, m)
+                    see_val = see_capture(board, m, self._values)
                     if see_val < 0:
                         # Losing capture: search it after quiet moves.
                         return 10_000 - see_val
@@ -253,7 +343,7 @@ class AIPlayer:
                 return -49_000
             if counter is not None and m == counter:
                 return -48_000
-            return -self._history.get((m.fc, m.fr, m.tc, m.tr), 0)
+            return -self._history.get(self._history_key(side, m), 0)
 
         return sorted(moves, key=key)
 
@@ -272,8 +362,15 @@ class AIPlayer:
 
         tt_entry = self._tt.get(state.board.turn_hash(state.turn))
         tt_best = tt_entry.best_move if tt_entry else None
-        moves = self._order_moves(moves, tt_best, ply=0, prev_move=None, board=state.board)
+        moves = self._order_moves(moves, tt_best, ply=0, prev_move=None,
+                                  board=state.board, side=int(state.turn))
+        if self.cfg.use_root_ordering and self._root_scores:
+            # Stable sort on the previous iteration's scores, keeping the ordering
+            # above as the tie-break for moves not yet scored.
+            scores = self._root_scores
+            moves.sort(key=lambda m: -scores.get((m.fc, m.fr, m.tc, m.tr), -_INF))
         best_move = moves[0]
+        iter_scores: dict[tuple[int, int, int, int], int] = {}
 
         for idx, move in enumerate(moves):
             if self._stopped:
@@ -293,6 +390,7 @@ class AIPlayer:
             if self._stopped:
                 break
             self._completed_root_moves += 1
+            iter_scores[(move.fc, move.fr, move.tc, move.tr)] = score
             if score > best_score:
                 best_score = score
                 best_move = move
@@ -309,6 +407,8 @@ class AIPlayer:
 
         if not self._stopped and best_move is not None:
             self._best_move_root = best_move
+            if self.cfg.use_root_ordering:
+                self._root_scores = iter_scores
             flag = TT_EXACT
             if best_score <= original_alpha:
                 flag = TT_UPPER
@@ -409,7 +509,8 @@ class AIPlayer:
                         null_score = beta
                     return null_score
 
-        moves = self._order_moves(moves, tt_best, ply, prev_move, board=state.board)
+        moves = self._order_moves(moves, tt_best, ply, prev_move,
+                                  board=state.board, side=int(state.turn))
 
         # Opponent den square: a quiet move that enters it is a *winning* move and
         # must never be futility/late-move pruned.
@@ -418,6 +519,8 @@ class AIPlayer:
         best_score = -_INF
         best_move: Move | None = None
         original_alpha = alpha
+        side = int(state.turn)
+        tried_quiets: list[Move] = []
 
         for idx, move in enumerate(moves):
             is_quiet = not move.captured and (move.tc, move.tr) != opp_den
@@ -437,9 +540,19 @@ class AIPlayer:
             state.apply_move(move)
 
             # ---- Late Move Reductions ----
+            # Guards (use_lmr_guards): never reduce inside the principal variation,
+            # and never reduce a move that enters the enemy den. Den entry wins the
+            # game outright — it is Jungle's equivalent of a mate, and reducing it
+            # means searching the single most important move at shallow depth. The
+            # `opp_den` test previously only fed LMP/futility, not LMR.
+            lmr_allowed = True
+            if self.cfg.use_lmr_guards and (is_pv or (move.tc, move.tr) == opp_den):
+                lmr_allowed = False
+
             do_full_search = True
             score = 0
-            if (idx >= LMR_MOVES_BEFORE and depth >= LMR_MIN_DEPTH
+            if (lmr_allowed
+                    and idx >= LMR_MOVES_BEFORE and depth >= LMR_MIN_DEPTH
                     and not move.captured
                     and (ply >= _MAX_PLY or move != self._killers[ply][0])
                     and (ply >= _MAX_PLY or move != self._killers[ply][1])):
@@ -473,20 +586,22 @@ class AIPlayer:
             if score > alpha:
                 alpha = score
             if alpha >= beta:
-                # Beta cutoff: record killer + counter + history for non-captures
+                # Beta cutoff: record killer + counter + history for non-captures.
                 if not move.captured and 0 <= ply < _MAX_PLY:
                     slots = self._killers[ply]
                     if slots[0] != move:
                         slots[1] = slots[0]
                         slots[0] = move
-                    self._history[(move.fc, move.fr, move.tc, move.tr)] = (
-                        self._history.get((move.fc, move.fr, move.tc, move.tr), 0)
-                        + depth * depth
-                    )
+                    self._history_bonus(side, move, depth)
+                    # Everything quiet we tried before this and rejected gets a
+                    # matching penalty, so history measures relative usefulness.
+                    self._history_malus(side, tried_quiets, depth)
                     if prev_move is not None:
                         self._counter[(prev_move.fc, prev_move.fr,
                                        prev_move.tc, prev_move.tr)] = move
                 break
+            if is_quiet:
+                tried_quiets.append(move)
 
         if best_move is not None:
             flag = TT_EXACT
@@ -506,8 +621,15 @@ class AIPlayer:
     def _quiesce(self, state: GameState, alpha: int, beta: int,
                  qply: int, ply: int) -> int:
         self._nodes += 1
+        if ply + qply > self._seldepth:
+            self._seldepth = ply + qply
         if self._nodes & 2047 == 0 and self._time_expired():
             self._stopped = True
+            return 0
+        # Bail out immediately once stopped. Without this, every frame on the way
+        # back up still runs a full evaluate(), generates noisy moves and makes a
+        # move before returning — real work spent past the deadline.
+        if self._stopped:
             return 0
 
         # Terminal check (winner already declared).
@@ -529,6 +651,17 @@ class AIPlayer:
             if tt_entry.flag == TT_UPPER and tt_score <= alpha:
                 return tt_score
 
+        # `evaluate` is purely static, so the terminal cases it used to absorb are
+        # handled here. Generate the legal moves once and derive the noisy subset
+        # from them: `generate_noisy_moves` would regenerate the whole list, and
+        # the old `evaluate` produced a third generation via `get_winner()`.
+        moves = state.legal_moves()
+        if not moves:
+            # No legal moves: the side to move has lost, at this distance.
+            return _mated_in(ply + qply)
+        if state.is_50_move_draw():
+            return 0
+
         stand_pat = evaluate(state, state.turn, self.cfg)
         if qply >= QUIESCENCE_MAX_PLY:
             return stand_pat
@@ -541,9 +674,10 @@ class AIPlayer:
         board = state.board
         opp_den = DEN_BLACK if state.turn == Color.BLUE else DEN_BLUE
         if self.cfg.use_noisy_den_quiescence:
-            moves = generate_noisy_moves(board, state.turn)
+            moves = [m for m in moves
+                     if m.captured != 0 or (m.tc, m.tr) == opp_den]
         else:
-            moves = generate_capture_moves(board, state.turn)
+            moves = [m for m in moves if m.captured != 0]
         # MVV-LVA ordering (least-valuable attacker breaks victim ties), then SEE
         # filter. Den-entry moves (winning) sort first.
         if self.cfg.use_mvv_lva_fix:
@@ -557,10 +691,14 @@ class AIPlayer:
             if (move.tc, move.tr) == opp_den:
                 return _mate_in(ply + qply)
             # Delta pruning: even capturing this victim won't reach alpha.
-            if stand_pat + abs(move.captured) + delta_margin < alpha:
+            # Must use the victim's VALUE (100..800), not its piece id (1..8) —
+            # comparing the id against a centipawn margin collapses this test to
+            # "am I ~200 behind alpha" and then prunes every capture, free
+            # material included.
+            if stand_pat + self._values[abs(move.captured)] + delta_margin < alpha:
                 continue
             # SEE prune: skip clearly losing captures.
-            if see_capture(board, move) < 0:
+            if see_capture(board, move, self._values) < 0:
                 continue
 
             state.apply_move(move)

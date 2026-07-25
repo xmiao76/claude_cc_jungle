@@ -1,30 +1,58 @@
 """Integration tests: full AI-vs-AI game simulation."""
 
-import pytest
+from ai.minimax import AIPlayer
 from engine.game_state import GameState
 from engine.pieces import Color
-from ai.minimax import AIPlayer
+from tests.helpers import assert_board_consistent
 
 
-def run_game(difficulty: int = 0, max_moves: int = 300) -> Color | None:
-    """Run a full AI-vs-AI game. Return winner or None if max_moves exceeded."""
+def play_ai_game(difficulty: int = 0, max_plies: int = 300,
+                 budget_ms: int = 300) -> GameState:
+    """Run an AI-vs-AI game and return the final GameState.
+
+    Returns the state rather than just the winner so callers can assert on how
+    the game actually ended instead of merely that it did not crash.
+    """
     gs = GameState()
     gs.new_game()
 
     ai_blue = AIPlayer(Color.BLUE, difficulty)
     ai_black = AIPlayer(Color.BLACK, difficulty)
 
-    for _ in range(max_moves):
+    for _ in range(max_plies):
         if gs.is_terminal():
-            return gs.get_winner()
-
+            break
         ai = ai_blue if gs.turn == Color.BLUE else ai_black
-        move = ai.get_best_move(gs, time_budget_ms=300)
+        move = ai.get_best_move(gs, time_budget_ms=budget_ms)
         if move is None:
             break
         gs.apply_move(move)
 
-    return gs.get_winner()
+    return gs
+
+
+def run_game(difficulty: int = 0, max_moves: int = 300) -> Color | None:
+    """Run a full AI-vs-AI game. Return the winner, or None for a draw/cap."""
+    return play_ai_game(difficulty, max_moves).get_winner()
+
+
+def _assert_plausible_outcome(gs: GameState, min_plies: int) -> None:
+    """Assert the game really progressed and ended in a self-consistent state."""
+    assert len(gs.history) >= min_plies, (
+        f"game stalled after {len(gs.history)} plies"
+    )
+    assert_board_consistent(gs.board)
+
+    winner = gs.get_winner()
+    if gs.result is not None:
+        # A decided game: the winner must still have pieces on the board.
+        assert winner is not None
+        assert gs.board.alive_count(winner) > 0
+    if winner is None:
+        # Undecided: either the ply cap or a genuine draw, never a silent bug.
+        assert not gs.result
+        assert gs.board.alive_count(Color.BLUE) > 0
+        assert gs.board.alive_count(Color.BLACK) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -32,20 +60,19 @@ def run_game(difficulty: int = 0, max_moves: int = 300) -> Color | None:
 # ---------------------------------------------------------------------------
 
 def test_ai_vs_ai_completes_easy():
-    """Easy AI-vs-AI game should complete within 300 moves."""
-    winner = run_game(difficulty=0, max_moves=300)
-    # Winner may be None if game didn't finish in 300 moves — that's OK for Easy
-    # Key assertion: no crash
-    assert True
+    """A full Easy AI-vs-AI game ends in a self-consistent state."""
+    gs = play_ai_game(difficulty=0, max_plies=300)
+    _assert_plausible_outcome(gs, min_plies=10)
 
 
 def test_ai_vs_ai_medium_no_crash():
-    """Medium AI-vs-AI game should run without crash."""
+    """Medium AI-vs-AI holds the board invariants at every ply."""
     gs = GameState()
     gs.new_game()
     ai_blue = AIPlayer(Color.BLUE, 1)
     ai_black = AIPlayer(Color.BLACK, 1)
 
+    plies = 0
     for _ in range(50):
         if gs.is_terminal():
             break
@@ -54,11 +81,11 @@ def test_ai_vs_ai_medium_no_crash():
         if move is None:
             break
         gs.apply_move(move)
-        # Invariant: every position has consistent piece counts
-        assert gs.board.alive_count(Color.BLUE) >= 0
-        assert gs.board.alive_count(Color.BLACK) >= 0
+        plies += 1
+        # The grid, the position index and the incremental hash must all agree.
+        assert_board_consistent(gs.board)
 
-    assert True  # No crash = pass
+    assert plies >= 10, f"Medium game stalled after {plies} plies"
 
 
 def test_game_state_consistent_throughout():
@@ -86,9 +113,11 @@ def test_game_state_consistent_throughout():
         ai = ai_blue if gs.turn == Color.BLUE else ai_black
         move = ai.get_best_move(gs, time_budget_ms=200)
         assert move is not None
+        assert move in legal, f"AI returned a move outside the legal list: {move}"
         gs.apply_move(move)
+        assert_board_consistent(gs.board)
 
-    assert True
+    assert len(gs.history) >= 10, f"game stalled after {len(gs.history)} plies"
 
 
 def test_undo_all_moves_restores_start():

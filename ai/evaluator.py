@@ -1,15 +1,42 @@
-"""Board evaluation function for Jungle AI."""
+"""Static board evaluation for the Jungle AI.
+
+Two invariants govern everything here.
+
+**Antisymmetry.** ``evaluate(state, BLUE) == -evaluate(state, BLACK)`` for every
+position, enforced by ``tests/test_evaluator.py``. The way to keep it is to
+compute each per-piece term from the *piece's own* colour — added for our pieces,
+subtracted for theirs — never from the evaluating side's point of view. Terms
+that depend on the position as a whole (side to move, den threat) must be written
+as an own-minus-theirs pair.
+
+**Purely static.** No mate scores, no draw scores, no terminal detection. The
+search owns those, because only it knows the ply needed to score a mate by
+distance. See the note on ``_INF`` below.
+
+Evaluation is roughly two thirds of search time, so the shape of this file is
+performance-led: rank arithmetic on plain ints rather than ``IntEnum``
+construction, precomputed neighbour and distance tables from ``ai.eval_tables``,
+one pass per side, and direct grid indexing instead of a method call per square.
+"""
 
 from __future__ import annotations
 
+from ai.eval_tables import ADJACENT, DEN_DISTANCE, MOVEMENT_CLASS, UNREACHABLE
+from ai.search_config import piece_values
 from config import (
-    COLS, ROWS,
-    DEN_BLACK, DEN_BLUE, TRAPS_BLACK, TRAPS_BLUE,
-    TERRAIN, TERRAIN_RIVER,
-    PIECE_VALUES, EVAL_WEIGHTS, PST_TABLE,
+    DEN_BLACK,
+    DEN_BLUE,
+    DEN_RACE_HORIZON,
+    EVAL_WEIGHTS,
+    PST_TABLE,
+    ROWS,
+    TERRAIN,
+    TERRAIN_RIVER,
+    TRAPS_BLACK,
+    TRAPS_BLUE,
 )
-from engine.pieces import Animal, Color, piece_id_animal, piece_id_color
-from engine.move_generator import _JUMP_TABLE
+from engine.pieces import Color
+from engine.rules import can_capture
 
 _OPPONENT_DEN = {
     Color.BLUE: DEN_BLACK,
@@ -21,229 +48,281 @@ _OWN_DEN = {
     Color.BLACK: DEN_BLACK,
 }
 
+_OWN_TRAPS = {
+    Color.BLUE: TRAPS_BLUE,
+    Color.BLACK: TRAPS_BLACK,
+}
+
+# Alpha/beta sentinel — wider than any score the engine can produce.
+#
+# The score scale is: |static eval| << |mate score| < _INF. Mate scores live just
+# below _INF (see ``ai/minimax.py:_MATE``) so a forced win always beats any static
+# evaluation and a shorter mate always beats a longer one. `evaluate` must never
+# return a terminal score: it used to emit ±_INF, which outranked every real mate,
+# defeated mate-distance preference, and landed in the transposition table outside
+# the alpha/beta window.
 _INF = 10_000_000
 
-_DIRS = ((0, 1), (0, -1), (1, 0), (-1, 0))
+_RAT = 1
+_ELEPHANT = 8
+
 _MIDLINE = ROWS // 2  # row 4
 
 
 def _advancement(color: Color, row: int) -> int:
+    """Rows advanced from *color*'s own back rank toward the enemy den."""
     return (ROWS - 1 - row) if color == Color.BLUE else row
 
 
-def _pseudo_mobility(board, color: Color) -> int:
-    """Cheap mobility approximation: count adjacent empty/capturable squares.
+def _jump_is_open(grid, c: int, r: int, rank: int) -> bool:
+    """True if a Lion/Tiger on (c, r) has at least one leap actually available.
 
-    Doesn't validate full capture legality (jumps, rat/elephant rules) — used
-    only as a proxy in evaluation, not for move generation.
+    Checks what the old version did not: that a Rat is not sitting in the river
+    on the flight path, and that the landing square is not occupied by a piece we
+    cannot take. The old form was ``bool(_JUMP_TABLE.get((c, r)))`` — pure
+    geometry, blind to the board, so it paid a flat bonus for merely standing on a
+    river bank.
     """
+    from engine.move_generator import _JUMP_TABLE, _can_jump
+
+    for (dc, dr, lc, lr) in _JUMP_TABLE.get((c, r), ()):
+        if not _can_jump(rank, dc, dr):
+            continue
+        # Walk the flight path; any Rat in the water blocks the leap.
+        blocked = False
+        if dc == 0:
+            step = 1 if lr > r else -1
+            rr = r + step
+            while rr != lr:
+                if TERRAIN[c][rr] == TERRAIN_RIVER and abs(grid[c][rr]) == _RAT:
+                    blocked = True
+                    break
+                rr += step
+        else:
+            step = 1 if lc > c else -1
+            cc = c + step
+            while cc != lc:
+                if TERRAIN[cc][r] == TERRAIN_RIVER and abs(grid[cc][r]) == _RAT:
+                    blocked = True
+                    break
+                cc += step
+        if not blocked:
+            return True
+    return False
+
+
+def _pseudo_mobility(grid, board, color: Color) -> int:
+    """Cheap mobility proxy: adjacent squares that are empty or enemy-occupied.
+
+    Ignores the river restriction, the own-den ban and capture legality, so it
+    over-counts. Retained as the default because the accurate version below
+    measured no better while costing a `can_capture` call per adjacent enemy —
+    and mobility carries a weight of 2, so accuracy here buys very little.
+    """
+    is_blue = color == Color.BLUE
     count = 0
-    for pid, (c, r) in board.pieces_of(color).items():
-        for dc, dr in _DIRS:
-            nc, nr = c + dc, r + dr
-            if not (0 <= nc < COLS and 0 <= nr < ROWS):
-                continue
-            target = board.get(nc, nr)
-            if target == 0:
-                count += 1
-            elif (target > 0) != (color == Color.BLUE):
+    for _pid, (c, r) in board.pieces_of(color).items():
+        for (nc, nr) in ADJACENT[(c, r)]:
+            target = grid[nc][nr]
+            if target == 0 or (target > 0) != is_blue:
                 count += 1
     return count
 
 
-def _has_jump_available(board, c: int, r: int) -> bool:
-    """True if Lion/Tiger at (c,r) has at least one unblocked jump endpoint."""
-    return bool(_JUMP_TABLE.get((c, r)))
+def _real_mobility(grid, board, color: Color) -> int:
+    """Count squares this side's pieces can actually step to.
+
+    Respects what the proxy ignores: only a Rat may enter the river, nobody may
+    enter their own den, and a capture has to be legal.
+    """
+    own_den = _OWN_DEN[color]
+    is_blue = color == Color.BLUE
+    count = 0
+    for pid, (c, r) in board.pieces_of(color).items():
+        rank = pid if pid > 0 else -pid
+        for (nc, nr) in ADJACENT[(c, r)]:
+            if (nc, nr) == own_den:
+                continue
+            if TERRAIN[nc][nr] == TERRAIN_RIVER and rank != _RAT:
+                continue
+            target = grid[nc][nr]
+            if target == 0:
+                count += 1
+            elif (target > 0) != is_blue:
+                if can_capture(pid, target, c, r, nc, nr):
+                    count += 1
+    return count
 
 
-def _orth_friendly_adjacent(board, c: int, r: int, color: Color) -> bool:
-    """True if *color* has a piece orthogonally adjacent to (c, r)."""
-    for dc, dr in _DIRS:
-        nc, nr = c + dc, r + dr
-        if 0 <= nc < COLS and 0 <= nr < ROWS:
-            p = board.get(nc, nr)
-            if p != 0 and piece_id_color(p) == color:
-                return True
+def _orth_friendly_adjacent(grid, c: int, r: int, is_blue: bool) -> bool:
+    """True if the given side has a piece orthogonally adjacent to (c, r)."""
+    for (nc, nr) in ADJACENT[(c, r)]:
+        p = grid[nc][nr]
+        if p != 0 and (p > 0) == is_blue:
+            return True
     return False
 
 
-def _den_threat_level(board, color: Color) -> int:
-    """Danger to *color*'s den from the opponent.
+def _den_threat_level(grid, color: Color) -> int:
+    """How exposed *color*'s den is to an enemy already on an approach square.
 
-    Counts enemy pieces sitting on a den-approach square (a trap orthogonally
-    adjacent to the den — one step from entering). The weight is higher when no
-    friendly piece is adjacent to recapture (an enemy on our trap has rank 0, so
-    any adjacent friendly piece can take it). This is additive to the pure
-    den-proximity gradient: it expresses whether the approach is *defended*.
+    Counts enemy pieces standing on a trap orthogonally adjacent to our den — one
+    step from entering. Weighted higher when no friendly piece is adjacent to take
+    it, since an enemy on our trap has rank 0 and any neighbour can capture it.
     """
     den_c, den_r = _OWN_DEN[color]
-    own_traps = TRAPS_BLUE if color == Color.BLUE else TRAPS_BLACK
-    opponent = Color.BLACK if color == Color.BLUE else Color.BLUE
+    is_blue = color == Color.BLUE
     danger = 0
-    for (tc, tr) in own_traps:
+    for (tc, tr) in _OWN_TRAPS[color]:
         if abs(tc - den_c) + abs(tr - den_r) != 1:
-            continue  # only den-adjacent traps are entry approaches
-        occ = board.get(tc, tr)
-        if occ != 0 and piece_id_color(occ) == opponent:
-            danger += 1 if _orth_friendly_adjacent(board, tc, tr, color) else 3
+            continue                      # not an entry approach
+        occ = grid[tc][tr]
+        if occ != 0 and (occ > 0) != is_blue:
+            danger += 1 if _orth_friendly_adjacent(grid, tc, tr, is_blue) else 3
     return danger
 
 
-def evaluate(state, color: Color, cfg=None) -> int:
-    """Evaluate board from *color*'s perspective. Higher = better for color.
+def _attack_status(grid, pid: int, c: int, r: int, is_blue: bool) -> tuple[bool, bool]:
+    """Return (attacked, defended) for the piece at (c, r).
 
-    *cfg* is an optional :class:`ai.search_config.SearchConfig` gating the
-    enhancement terms (PST, den-threat). When ``None`` all terms are enabled.
+    Adjacent squares only. Lion/Tiger leap attacks are not counted — including
+    them would mean walking the jump table for every piece on every evaluation,
+    and leap captures are rare enough that the approximation is worth its cost.
+    """
+    attacked = False
+    defended = False
+    for (nc, nr) in ADJACENT[(c, r)]:
+        other = grid[nc][nr]
+        if other == 0:
+            continue
+        if (other > 0) == is_blue:
+            defended = True
+        elif not attacked and can_capture(other, pid, nc, nr, c, r):
+            attacked = True
+    return attacked, defended
+
+
+def evaluate(state, color: Color, cfg=None) -> int:
+    """Statically evaluate the board from *color*'s perspective. Higher = better.
+
+    *cfg* is an optional :class:`ai.search_config.SearchConfig` gating individual
+    terms. ``None`` means the shipped defaults — which is *not* the same as "every
+    term on": several measured weaker and are off by default.
     """
     board = state.board
+    grid = board.grid
     opponent = Color.BLACK if color == Color.BLUE else Color.BLUE
-
-    winner = state.get_winner()
-    if winner is not None:
-        return _INF if winner == color else -_INF
-
-    # Drawn position: explicit zero.
-    if state.is_50_move_draw():
-        return 0
-
-    score = 0
-
-    opp_den_c, opp_den_r = _OPPONENT_DEN[color]
-    own_den_c, own_den_r = _OWN_DEN[color]
-
-    adv_w = EVAL_WEIGHTS["advancement_per_row"]
-    den_max = EVAL_WEIGHTS["den_proximity_max_dist"]
-    den_step = EVAL_WEIGHTS["den_proximity_per_step"]
-    rat_water = EVAL_WEIGHTS["rat_in_water"]
-    rat_near_ele = EVAL_WEIGHTS["rat_adjacent_to_enemy_elephant"]
-    trap_bonus = EVAL_WEIGHTS["trap_control"]
-    den_def = EVAL_WEIGHTS["den_defender"]
-    jump_ready = EVAL_WEIGHTS["jump_ready"]
-    rat_blocks = EVAL_WEIGHTS["rat_blocks_river"]
-    adv_accel = EVAL_WEIGHTS["advancement_acceleration"]
-    tempo = EVAL_WEIGHTS["tempo"]
-    mob_w = EVAL_WEIGHTS["mobility"]
-    threat_w = EVAL_WEIGHTS["threat"]
-    pst_w = EVAL_WEIGHTS["pst"]
 
     use_pst = True if cfg is None else cfg.use_pst
     use_den_threat = True if cfg is None else cfg.use_den_threat
+    use_true_den = False if cfg is None else cfg.use_true_den_distance
+    use_hanging = False if cfg is None else cfg.use_hanging
+    use_real_jump = False if cfg is None else cfg.use_real_jump_ready
+    use_real_mob = False if cfg is None else cfg.use_real_mobility
+    values = piece_values(cfg)
 
-    enemy_elephant_pid = -int(Animal.ELEPHANT) if color == Color.BLUE else int(Animal.ELEPHANT)
+    w = EVAL_WEIGHTS
+    adv_w = w["advancement_per_row"]
+    den_max = w["den_proximity_max_dist"]
+    den_step = w["den_proximity_per_step"]
+    race_w = w["den_race_per_move"]
+    rat_water = w["rat_in_water"]
+    rat_blocks = w["rat_blocks_river"]
+    rat_near_ele = w["rat_adjacent_to_enemy_elephant"]
+    trap_bonus = w["trap_control"]
+    den_def = w["den_defender"]
+    jump_ready = w["jump_ready"]
+    adv_accel = w["advancement_acceleration"]
+    tempo = w["tempo"]
+    mob_w = w["mobility"]
+    pst_w = w["pst"]
+    hang_own = w["hanging_own_turn_pct"]
+    hang_other = w["hanging_other_pct"]
+    trapped_pct = w["trapped_and_attacked_pct"]
 
-    my_pieces = board.pieces_of(color)
-    opp_pieces = board.pieces_of(opponent)
+    score = 0
+    turn = state.turn
 
-    # 1. Material + positional — own pieces
-    for pid, (c, r) in my_pieces.items():
-        animal = piece_id_animal(pid)
-        score += PIECE_VALUES[int(animal)]
-        adv = _advancement(color, r)
-        score += adv * adv_w
-        if adv > _MIDLINE:
-            score += (adv - _MIDLINE) * adv_accel
-        if use_pst:
-            score += PST_TABLE[adv][c] * pst_w
+    # Evaluate both sides with one shared body, flipping the sign. This is what
+    # keeps the function antisymmetric: every term below is computed from `side`,
+    # the colour of the piece being looked at, never from `color`.
+    for side, sign in ((color, 1), (opponent, -1)):
+        enemy = Color.BLACK if side == Color.BLUE else Color.BLUE
+        is_blue = side == Color.BLUE
+        opp_den = _OPPONENT_DEN[side]
+        own_den_c, own_den_r = _OWN_DEN[side]
+        opp_den_c, opp_den_r = opp_den
+        enemy_traps = _OWN_TRAPS[enemy]
+        enemy_elephant_pid = -_ELEPHANT if is_blue else _ELEPHANT
+        side_to_move = turn == side
+        hang_pct = hang_own if side_to_move else hang_other
 
-        dist = abs(c - opp_den_c) + abs(r - opp_den_r)
-        if dist <= den_max:
-            score += (den_max + 1 - dist) * den_step
+        subtotal = 0
+        for pid, (c, r) in board.pieces_of(side).items():
+            rank = pid if pid > 0 else -pid
+            subtotal += values[rank]
 
-        # Den defender
-        own_dist = abs(c - own_den_c) + abs(r - own_den_r)
-        if own_dist <= 2:
-            score += den_def
+            adv = _advancement(side, r)
+            subtotal += adv * adv_w
+            if adv > _MIDLINE:
+                subtotal += (adv - _MIDLINE) * adv_accel
+            if use_pst:
+                subtotal += PST_TABLE[adv][c] * pst_w
 
-        if animal == Animal.RAT:
-            if TERRAIN[c][r] == TERRAIN_RIVER:
-                score += rat_water + rat_blocks
-            for dc, dr in _DIRS:
-                nc, nr = c + dc, r + dr
-                if 0 <= nc < COLS and 0 <= nr < ROWS:
-                    if board.get(nc, nr) == enemy_elephant_pid:
-                        score += rat_near_ele
+            # Approach to the enemy den. The true move distance accounts for the
+            # river and for Lion/Tiger leaps; Manhattan distance walks through the
+            # water as if it were not there, which mis-prices the whole den race.
+            if use_true_den:
+                dist = DEN_DISTANCE[MOVEMENT_CLASS[rank]][opp_den].get((c, r), UNREACHABLE)
+                if dist <= DEN_RACE_HORIZON:
+                    subtotal += (DEN_RACE_HORIZON + 1 - dist) * race_w
+            else:
+                dist = abs(c - opp_den_c) + abs(r - opp_den_r)
+                if dist <= den_max:
+                    subtotal += (den_max + 1 - dist) * den_step
 
-        if animal in (Animal.LION, Animal.TIGER):
-            if _has_jump_available(board, c, r):
-                score += jump_ready
+            # Defending our own den.
+            if abs(c - own_den_c) + abs(r - own_den_r) <= 2:
+                subtotal += den_def
 
-    # 2. Material + positional — opponent pieces
-    own_elephant_pid = int(Animal.ELEPHANT) if color == Color.BLUE else -int(Animal.ELEPHANT)
-    for pid, (c, r) in opp_pieces.items():
-        animal = piece_id_animal(pid)
-        score -= PIECE_VALUES[int(animal)]
-        adv = _advancement(opponent, r)
-        score -= adv * adv_w
-        if adv > _MIDLINE:
-            score -= (adv - _MIDLINE) * adv_accel
-        if use_pst:
-            score -= PST_TABLE[adv][c] * pst_w
+            if rank == _RAT:
+                if TERRAIN[c][r] == TERRAIN_RIVER:
+                    subtotal += rat_water + rat_blocks
+                for (nc, nr) in ADJACENT[(c, r)]:
+                    if grid[nc][nr] == enemy_elephant_pid:
+                        subtotal += rat_near_ele
+            elif rank >= 6:      # Tiger or Lion
+                if use_real_jump:
+                    if _jump_is_open(grid, c, r, rank):
+                        subtotal += jump_ready
+                else:
+                    from engine.move_generator import _JUMP_TABLE
+                    if _JUMP_TABLE.get((c, r)):
+                        subtotal += jump_ready
 
-        dist = abs(c - own_den_c) + abs(r - own_den_r)
-        if dist <= den_max:
-            score -= (den_max + 1 - dist) * den_step
+            # Sitting in an enemy trap means rank 0: anything adjacent can take it.
+            if (c, r) in enemy_traps:
+                subtotal -= trap_bonus
+                if use_hanging:
+                    attacked, _ = _attack_status(grid, pid, c, r, is_blue)
+                    if attacked:
+                        subtotal -= values[rank] * trapped_pct // 100
+            elif use_hanging:
+                # Loose material. The old evaluation could not see a hanging Lion
+                # at all: it only surfaced if quiescence happened to reach it.
+                attacked, defended = _attack_status(grid, pid, c, r, is_blue)
+                if attacked and not defended:
+                    subtotal -= values[rank] * hang_pct // 100
 
-        opp_own_dist = abs(c - opp_den_c) + abs(r - opp_den_r)
-        if opp_own_dist <= 2:
-            score -= den_def
+        mob = _real_mobility if use_real_mob else _pseudo_mobility
+        subtotal += mob(grid, board, side) * mob_w
+        if use_den_threat:
+            subtotal -= w["den_threat"] * _den_threat_level(grid, side)
 
-        if animal == Animal.RAT:
-            if TERRAIN[c][r] == TERRAIN_RIVER:
-                score -= rat_water + rat_blocks
-            for dc, dr in _DIRS:
-                nc, nr = c + dc, r + dr
-                if 0 <= nc < COLS and 0 <= nr < ROWS:
-                    if board.get(nc, nr) == own_elephant_pid:
-                        score -= rat_near_ele
+        score += sign * subtotal
 
-        if animal in (Animal.LION, Animal.TIGER):
-            if _has_jump_available(board, c, r):
-                score -= jump_ready
-
-    # 3. Trap control: opponent piece in our traps = effectively rank 0
-    our_traps = TRAPS_BLUE if color == Color.BLUE else TRAPS_BLACK
-    their_traps = TRAPS_BLACK if color == Color.BLUE else TRAPS_BLUE
-    for pid, (c, r) in opp_pieces.items():
-        if (c, r) in our_traps:
-            score += trap_bonus
-    for pid, (c, r) in my_pieces.items():
-        if (c, r) in their_traps:
-            score -= trap_bonus
-
-    # 4. Mobility (cheap approximation)
-    score += (_pseudo_mobility(board, color) - _pseudo_mobility(board, opponent)) * mob_w
-
-    # 5. Tempo (small bonus for side to move)
-    if state.turn == color:
-        score += tempo
-    else:
-        score -= tempo
-
-    # 6. Den threat / safety: penalize undefended enemy pieces on our den
-    #    approaches, reward the mirror. Additive to den-proximity (adds defense
-    #    awareness). Computed per-own-color so it stays antisymmetric.
-    if use_den_threat:
-        dt_w = EVAL_WEIGHTS["den_threat"]
-        score -= dt_w * _den_threat_level(board, color)
-        score += dt_w * _den_threat_level(board, opponent)
-
-    # Threat term intentionally folded into mobility/trap/material to keep
-    # eval cheap; threat_w retained for future tuning. Reserve a tiny use:
-    # bonus for our pieces adjacent to enemy higher-rank pieces (pressure).
-    if threat_w:
-        for pid, (c, r) in my_pieces.items():
-            for dc, dr in _DIRS:
-                nc, nr = c + dc, r + dr
-                if 0 <= nc < COLS and 0 <= nr < ROWS:
-                    target = board.get(nc, nr)
-                    if target != 0 and ((target > 0) != (color == Color.BLUE)):
-                        score += threat_w
-        for pid, (c, r) in opp_pieces.items():
-            for dc, dr in _DIRS:
-                nc, nr = c + dc, r + dr
-                if 0 <= nc < COLS and 0 <= nr < ROWS:
-                    target = board.get(nc, nr)
-                    if target != 0 and ((target > 0) == (color == Color.BLUE)):
-                        score -= threat_w
+    # Side to move, applied once for the position rather than per side (adding it
+    # inside the loop would count it twice and silently double the weight).
+    score += tempo if turn == color else -tempo
 
     return score

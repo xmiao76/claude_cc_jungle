@@ -8,18 +8,13 @@ in the main search.
 
 from __future__ import annotations
 
-from config import TERRAIN, TERRAIN_RIVER, PIECE_VALUES
+from config import PIECE_VALUES_TUNED, TERRAIN, TERRAIN_RIVER
 from engine.board import Board, Move
-from engine.pieces import Animal, Color, piece_id_color, piece_id_animal, piece_id_rank
-from engine.rules import can_capture
 from engine.move_generator import _JUMP_TABLE
-
+from engine.pieces import Animal, Color, piece_id_animal, piece_id_color
+from engine.rules import can_capture
 
 _DIRS = ((0, -1), (0, 1), (-1, 0), (1, 0))
-
-
-def _piece_value(pid: int) -> int:
-    return PIECE_VALUES[piece_id_animal(pid)]
 
 
 def _attackers_to(board: Board, tc: int, tr: int, color: Color) -> list[tuple[int, int, int]]:
@@ -47,7 +42,7 @@ def _attackers_to(board: Board, tc: int, tr: int, color: Color) -> list[tuple[in
         # Lion / Tiger jumps
         if animal not in (Animal.LION, Animal.TIGER):
             continue
-        for (dc, dr, lc, lr) in _JUMP_TABLE.get((c, r), []):
+        for (dc, _dr, lc, lr) in _JUMP_TABLE.get((c, r), []):
             if (lc, lr) != (tc, tr):
                 continue
             if animal == Animal.TIGER and dc == 0:
@@ -81,11 +76,17 @@ def _attackers_to(board: Board, tc: int, tr: int, color: Color) -> list[tuple[in
     return out
 
 
-def see_capture(board: Board, move: Move) -> int:
+def see_capture(board: Board, move: Move,
+                values: tuple[int, ...] = PIECE_VALUES_TUNED) -> int:
     """Static Exchange Evaluation for a capture move.
 
-    Returns net material gain (positive = good for attacker side) assuming
-    optimal recapture sequence using lowest-rank legal attacker each time.
+    Returns net material gain (positive = good for attacker side) assuming both
+    sides keep recapturing with their cheapest legal attacker.
+
+    *values* must be the same table the evaluation is using, or SEE and the
+    evaluation will disagree about what an exchange is worth. Callers inside the
+    search pass ``ai.search_config.piece_values(cfg)``.
+
     Approximation: treats traps and jumps but not chained tactical motifs.
     """
     if not move.captured:
@@ -99,7 +100,7 @@ def see_capture(board: Board, move: Move) -> int:
 
     tc, tr = move.tc, move.tr
 
-    gain = [_piece_value(move.captured)]
+    gain = [values[abs(move.captured)]]
 
     # Simulate the capture; piece on target is now the original attacker.
     on_square_pid = attacker_pid
@@ -112,10 +113,12 @@ def see_capture(board: Board, move: Move) -> int:
         attackers = _live_attackers_on(board, tc, tr, side, removed, on_square_pid)
         if not attackers:
             break
-        # Pick the lowest-rank legal attacker.
-        attackers.sort(key=lambda t: piece_id_rank(t[2]))
+        # Recapture with the cheapest legal attacker. Must be ordered by VALUE,
+        # not by rank: with a Rat premium, rank order is no longer value order, so
+        # ranking by rank would recapture with the Rat ahead of the Cat.
+        attackers.sort(key=lambda t: values[abs(t[2])])
         ac, ar, apid = attackers[0]
-        gain.append(_piece_value(on_square_pid))
+        gain.append(values[abs(on_square_pid)])
         removed.add((ac, ar))
         on_square_pid = apid
         side = Color.BLACK if side == Color.BLUE else Color.BLUE
@@ -151,7 +154,7 @@ def _live_attackers_on(board: Board, tc: int, tr: int, color: Color,
 
         if animal not in (Animal.LION, Animal.TIGER):
             continue
-        for (dc, dr, lc, lr) in _JUMP_TABLE.get((c, r), []):
+        for (dc, _dr, lc, lr) in _JUMP_TABLE.get((c, r), []):
             if (lc, lr) != (tc, tr):
                 continue
             if animal == Animal.TIGER and dc == 0:

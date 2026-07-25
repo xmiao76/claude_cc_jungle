@@ -11,3 +11,4 @@ dist/
 *.egg-info/
 *.exe
 /.claude
+.ruff_cache/
