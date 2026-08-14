@@ -12,3 +12,4 @@ dist/
 *.exe
 /.claude
 .ruff_cache/
+/release/jungle_game
