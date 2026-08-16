@@ -17,3 +17,6 @@ dist/
 # Rust build artifacts. Cargo.lock IS tracked: the workspace produces binaries,
 # so a reproducible dependency set is worth having.
 /rust/target/
+
+# The compiled Python extension, copied out of rust/target by build.bat.
+*.pyd

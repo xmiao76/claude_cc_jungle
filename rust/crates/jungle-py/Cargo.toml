@@ -1,0 +1,24 @@
+[package]
+name = "jungle-py"
+description = "Python bindings for the Jungle engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+jungle-core = { path = "../jungle-core" }
+jungle-eval = { path = "../jungle-eval" }
+jungle-search = { path = "../jungle-search" }
+
+# abi3 so one built extension works across Python 3.10+ rather than being tied
+# to the exact interpreter that built it. `extension-module` keeps us from
+# linking libpython, which is what lets a plain `cargo build` produce something
+# importable -- no maturin, and so no extra build dependency for build.bat.
+[dependencies.pyo3]
+version = "0.29"
+features = ["extension-module", "abi3-py310"]
+
+[lib]
+name = "jungle_native"
+crate-type = ["cdylib"]

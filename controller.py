@@ -9,7 +9,7 @@ from enum import Enum, auto
 import pygame
 
 import config
-from ai.minimax import AIPlayer
+from ai.native import AIEngine, make_ai_player
 from config import (
     AI_TIME_HARD_MS,
     DIFFICULTY_LABELS,
@@ -48,8 +48,8 @@ class Controller:
         self.difficulty = 1
         self.mode_ava = False
 
-        self._ai_blue: AIPlayer | None = None
-        self._ai_black: AIPlayer | None = None
+        self._ai_blue: AIEngine | None = None
+        self._ai_black: AIEngine | None = None
         # Monotonic token identifying the current search. A result arriving with a
         # stale token belongs to a position we have already left and is discarded.
         self._ai_generation = 0
@@ -203,8 +203,8 @@ class Controller:
         # Otherwise a piece from the finished game keeps sliding across the new one.
         self.renderer.clear_transient_effects()
 
-        self._ai_blue = AIPlayer(Color.BLUE, self.difficulty)
-        self._ai_black = AIPlayer(Color.BLACK, self.difficulty)
+        self._ai_blue = make_ai_player(Color.BLUE, self.difficulty)
+        self._ai_black = make_ai_player(Color.BLACK, self.difficulty)
 
         if ava:
             self.state = AppState.AI_VS_AI_THINKING
