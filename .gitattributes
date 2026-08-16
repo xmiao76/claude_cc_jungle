@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# The golden rules corpus is gzip. Line-ending normalization would corrupt it,
+# and `text=auto` only avoids that by guessing from the content — say so instead.
+*.gz binary
