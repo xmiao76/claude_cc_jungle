@@ -44,8 +44,18 @@ _RNG = random.Random(0xDEADBEEF)
 
 # zobrist_table[col][row][piece_id_index]
 # piece_id_index maps: pid in range -8..-1, 1..8 → index 0..15
+#
+# The Blue branch must be `pid + 7`, not `pid - 1`. With `pid - 1` both branches
+# land in 0..7, so each Blue piece shared a key with the Black piece of
+# complementary rank (Blue Rat with Black Elephant, Blue Cat with Black Lion, …)
+# and the upper eight slots of every square were allocated but never used.
+# Swapping such a pair produced a bit-identical hash for a genuinely different
+# position, which silently poisoned the transposition table, `is_repetition()`
+# and the opening book. The worst pair was Rat/Elephant — the two pieces with a
+# special rule between them, so a TT hit could return a score computed with the
+# tactic inverted. See tests/test_zobrist.py.
 def _pid_index(pid: int) -> int:
-    return pid + 8 if pid < 0 else pid - 1  # -8→0, -1→7, 1→8, 8→15
+    return pid + 8 if pid < 0 else pid + 7  # -8→0, -1→7, 1→8, 8→15
 
 _ZOBRIST: list[list[list[int]]] = [
     [[_RNG.getrandbits(64) for _ in range(16)] for _ in range(ROWS)]
