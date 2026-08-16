@@ -1,0 +1,14 @@
+[package]
+name = "jungle-search"
+description = "Negamax PVS search for Jungle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+jungle-core = { path = "../jungle-core" }
+jungle-eval = { path = "../jungle-eval" }
+
+[lib]
+name = "jungle_search"

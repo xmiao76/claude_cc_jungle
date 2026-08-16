@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/jungle-core", "crates/jungle-eval"]
+members = ["crates/jungle-core", "crates/jungle-eval", "crates/jungle-search", "crates/jungle-cli"]
 
 [workspace.package]
 version = "0.1.0"

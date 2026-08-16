@@ -220,6 +220,11 @@ impl MoveList {
     pub fn sort(&mut self) {
         self.moves[..self.len].sort_unstable();
     }
+
+    #[inline(always)]
+    pub fn swap(&mut self, a: usize, b: usize) {
+        self.moves.swap(a, b);
+    }
 }
 
 impl Default for MoveList {

@@ -34,6 +34,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jungle-cli"
+version = "0.1.0"
+dependencies = [
+ "jungle-core",
+ "jungle-eval",
+ "jungle-search",
+]
+
+[[package]]
 name = "jungle-core"
 version = "0.1.0"
 dependencies = [
@@ -46,6 +55,14 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "jungle-core",
+]
+
+[[package]]
+name = "jungle-search"
+version = "0.1.0"
+dependencies = [
+ "jungle-core",
+ "jungle-eval",
 ]
 
 [[package]]

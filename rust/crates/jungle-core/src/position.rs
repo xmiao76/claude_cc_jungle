@@ -14,6 +14,10 @@ use crate::zobrist::{piece_key, turn_key};
 /// Plies without a capture before the game is drawn (50 full moves).
 pub const FIFTY_MOVE_PLIES: u16 = 100;
 
+/// Marks a null move in the undo stack. Distinct from every piece index and from
+/// `EMPTY`, so `unmake` can assert it is not handed one by mistake.
+const NULL_MARKER: u8 = 255;
+
 #[derive(Clone, Copy)]
 struct Undo {
     mv: Move,
@@ -225,6 +229,31 @@ impl Position {
             self.rats = (self.rats & !from_bb) | to_bb;
         }
 
+        self.stm = self.stm.flip();
+    }
+
+    /// Pass the turn without moving. Search-only: there is no such move in the
+    /// rules, and null-move pruning is the only caller.
+    ///
+    /// It participates in repetition history and bumps the halfmove clock, both
+    /// matching the Python engine, so a null-move line cannot accidentally hide a
+    /// repetition from the search above it.
+    pub fn make_null(&mut self) {
+        self.history.push(self.key());
+        self.undo.push(Undo {
+            mv: Move(0),
+            captured: NULL_MARKER,
+            halfmove: self.halfmove,
+        });
+        self.halfmove += 1;
+        self.stm = self.stm.flip();
+    }
+
+    pub fn unmake_null(&mut self) {
+        let u = self.undo.pop().expect("unmake_null with no null to undo");
+        debug_assert_eq!(u.captured, NULL_MARKER, "unmake_null on a real move");
+        self.history.pop();
+        self.halfmove = u.halfmove;
         self.stm = self.stm.flip();
     }
 
