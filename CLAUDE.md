@@ -81,9 +81,16 @@ Measured against the Python engine on its own bench positions at a 2s budget:
 **depth 16–17 versus depth 6–7**, and ~2.7M nodes/sec versus ~6k. In a 200-game
 match at 500ms per move it scored 95.0% (180-0-20), **+512 Elo [+447, +609]**.
 
-At *equal depth* the two engines are statistically indistinguishable (51.0%,
-+7 Elo [-57, +71] over 100 games at depth 3), which is the evidence that the
-port changed speed and not judgement.
+**Nominal depth is not a fair currency between these two engines.** At equal
+depth 3 they are indistinguishable (51.0%, +7 Elo [-57, +71] over 100 games),
+but at equal depth 5 the Rust engine measures *worse* (43.0%, -49 Elo
+[-87, -12] over 200 games). That is not a defect: it reaches depth 5 in about
+660 nodes where the Python engine needs about 5,200, so the same nominal depth
+is a much thinner tree — and it spends the nodes it saves going four times
+deeper. Compare at equal **nodes** (`crossmatch --mode nodes`, or `jungle match`)
+when the question is whether the decisions are better, and at equal **time**
+when the question is whether the engine is stronger. Do not read a fixed-depth
+result as either.
 
 ### Layering
 

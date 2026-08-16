@@ -7,12 +7,14 @@ producing a wrong move, so only a measurement or a targeted test finds them.
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 
 from ai.minimax import _HISTORY_MAX, AIPlayer
 from ai.search_config import strong_config
 from ai.transposition import TT_EXACT, TT_LOWER, TranspositionTable
 from engine.board import Move
+from engine.game_state import GameState
 from engine.pieces import Animal, Color
 from tests.helpers import make_gs
 
@@ -192,3 +194,40 @@ def test_search_marks_a_new_generation_per_move():
     before = ai._tt._generation
     ai.get_best_move(gs, time_budget_ms=120)
     assert ai._tt._generation > before
+
+
+def test_a_node_limit_bounds_the_search():
+    """The node budget is what makes an A/B against a differently-paced engine fair.
+
+    Nominal depth is not a common currency between two engines that prune
+    differently -- the same "depth 5" can be a tree of 700 nodes or 5000. Nodes
+    are, and unlike a clock a node budget is deterministic, so a match is
+    reproducible and unaffected by what else the machine is doing.
+    """
+    gs = GameState()
+    gs.new_game()
+
+    unlimited = _player()
+    unlimited.get_best_move(gs, time_budget_ms=400)
+
+    for budget in (500, 2_000, 8_000):
+        ai = _player()
+        ai._node_limit = budget
+        ai._time_limit = 3600.0
+        ai._stop_requested = False
+        ai._nodes = 0
+        ai._start_time = time.perf_counter()
+        ai._reset_search_heuristics()
+        ai._tt.new_search()
+        move = ai._search_iterative_deepening(gs)
+
+        assert move in gs.legal_moves(), "a node-limited search must still be legal"
+        # The clock is only consulted every 2048 nodes, so allow one interval of
+        # overshoot rather than pretending the bound is exact.
+        assert ai._nodes <= budget + 2048, f"budget {budget}, searched {ai._nodes}"
+
+
+def test_no_node_limit_means_no_node_limit():
+    """The default must stay unbounded, or normal play would be capped."""
+    ai = _player()
+    assert ai._node_limit is None
