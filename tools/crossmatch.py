@@ -39,9 +39,63 @@ from ai.minimax import AIPlayer
 from ai.search_config import strong_config
 from engine.game_state import GameState
 from engine.pieces import Color
-from tools.strength_harness import match_statistics
 
-ENGINE_EXE = Path(__file__).resolve().parent.parent / "rust" / "target" / "release" / "jungle.exe"
+try:
+    from tools.strength_harness import match_statistics
+except ImportError:  # pragma: no cover - only on branches with an older harness
+    # Older revisions of the harness computed these inline, so importing them
+    # fails when this script is dropped into a worktree of another branch to
+    # measure against *that* branch's engine. The fallback is the same
+    # arithmetic; `tests/test_harness_stats.py` pins the shared version.
+    import math
+
+    def _normal_cdf(x: float) -> float:
+        return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+    def _score_to_elo(score: float) -> float:
+        if score <= 0.0:
+            return -800.0
+        if score >= 1.0:
+            return 800.0
+        return -400.0 * math.log10(1.0 / score - 1.0)
+
+    def match_statistics(a_wins: int, b_wins: int, draws: int) -> dict:
+        games = a_wins + b_wins + draws
+        if games == 0:
+            return {
+                "a_wins": 0, "b_wins": 0, "draws": 0, "games": 0, "a_score": 0.5,
+                "score_stderr": 0.0, "elo": 0.0, "elo_lo": -800.0, "elo_hi": 800.0,
+                "los": 0.5,
+            }
+        score = (a_wins + 0.5 * draws) / games
+        variance = (
+            a_wins * (1.0 - score) ** 2
+            + draws * (0.5 - score) ** 2
+            + b_wins * score**2
+        ) / games
+        stderr = math.sqrt(variance / games) if games > 1 else 0.0
+        lo = min(max(score - 1.96 * stderr, 0.0), 1.0)
+        hi = min(max(score + 1.96 * stderr, 0.0), 1.0)
+        decisive = a_wins + b_wins
+        los = 0.5 if decisive == 0 else _normal_cdf((a_wins - b_wins) / math.sqrt(decisive))
+        return {
+            "a_wins": a_wins, "b_wins": b_wins, "draws": draws, "games": games,
+            "a_score": score, "score_stderr": stderr,
+            "elo": _score_to_elo(score), "elo_lo": _score_to_elo(lo),
+            "elo_hi": _score_to_elo(hi), "los": los,
+        }
+
+import os
+
+# Overridable so this script can be dropped into a worktree of another branch and
+# still drive the engine built here. That is how the Rust engine gets measured
+# against a *different* Python engine than the one sitting next to it.
+ENGINE_EXE = Path(
+    os.environ.get(
+        "JUNGLE_ENGINE_EXE",
+        Path(__file__).resolve().parent.parent / "rust" / "target" / "release" / "jungle.exe",
+    )
+)
 
 
 class RustEngine:

@@ -77,9 +77,25 @@ A cargo workspace of five crates:
   `bench`, `perft`. Not shipped.
 - **`jungle-py`** — the PyO3 extension, built as `jungle_native.pyd`.
 
-Measured against the Python engine on its own bench positions at a 2s budget:
-**depth 16–17 versus depth 6–7**, and ~2.7M nodes/sec versus ~6k. In a 200-game
-match at 500ms per move it scored 95.0% (180-0-20), **+512 Elo [+447, +609]**.
+Measured on the Python engine's own bench positions at a 2s budget, on an
+otherwise idle machine:
+
+| Engine | depth | nodes/sec |
+|---|---|---|
+| this branch's Python engine (v1.3.1) | 7–8 | 14–18k |
+| `main`'s Python engine (v1.5) | 8–10 | 25–27k |
+| Rust | **16–17** | **2.4M** |
+
+So roughly **+9 plies and 150x** against the engine it replaces here, and +7–8
+plies against the more advanced engine on `main`.
+
+**Benchmark on an idle machine.** An early measurement of this same Python
+engine read 3,300–6,000 nps and depth 5–6, which is 2–3x low: it was taken while
+other work was running. A contended bench understates the slower engine most,
+because it is the one that needs the whole time budget to reach its depth.
+
+In a 200-game match at 500ms per move the Rust engine scored 95.0% (180-0-20),
+**+512 Elo [+447, +609]**, against this branch's v1.3.1 engine.
 
 **Nominal depth is not a fair currency between these two engines**, and reading
 a fixed-depth result as a strength comparison will mislead you. All three of
