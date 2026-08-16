@@ -13,3 +13,7 @@ dist/
 /.claude
 .ruff_cache/
 /release/jungle_game
+
+# Rust build artifacts. Cargo.lock IS tracked: the workspace produces binaries,
+# so a reproducible dependency set is worth having.
+/rust/target/
