@@ -81,16 +81,24 @@ Measured against the Python engine on its own bench positions at a 2s budget:
 **depth 16–17 versus depth 6–7**, and ~2.7M nodes/sec versus ~6k. In a 200-game
 match at 500ms per move it scored 95.0% (180-0-20), **+512 Elo [+447, +609]**.
 
-**Nominal depth is not a fair currency between these two engines.** At equal
-depth 3 they are indistinguishable (51.0%, +7 Elo [-57, +71] over 100 games),
-but at equal depth 5 the Rust engine measures *worse* (43.0%, -49 Elo
-[-87, -12] over 200 games). That is not a defect: it reaches depth 5 in about
-660 nodes where the Python engine needs about 5,200, so the same nominal depth
-is a much thinner tree — and it spends the nodes it saves going four times
-deeper. Compare at equal **nodes** (`crossmatch --mode nodes`, or `jungle match`)
-when the question is whether the decisions are better, and at equal **time**
-when the question is whether the engine is stronger. Do not read a fixed-depth
-result as either.
+**Nominal depth is not a fair currency between these two engines**, and reading
+a fixed-depth result as a strength comparison will mislead you. All three of
+these are the same two engines:
+
+| Budget | Result | What it means |
+|---|---|---|
+| Equal **time**, 500ms, 200 games | +512 Elo [+447, +609] | how much stronger it actually is |
+| Equal **nodes**, 2500, 200 games | +24 Elo [-19, +69], inconclusive | the decisions are equally good |
+| Equal **depth 5**, 200 games | -49 Elo [-87, -12] | an artefact, not a defect |
+| Equal **depth 3**, 100 games | +7 Elo [-57, +71], inconclusive | — |
+
+The depth rows disagree with the node row because this engine reaches depth 5 in
+about 660 nodes where the Python one needs about 5,200: the same nominal depth is
+a far thinner tree, and the nodes it saves are spent going four plies deeper
+instead. Equal nodes is the honest per-decision comparison and says the port is
+at parity; equal time is the honest strength comparison and says it is 512 Elo
+ahead. Use `crossmatch --mode nodes` or `jungle match` for the first question and
+`--mode time` for the second.
 
 ### Layering
 
