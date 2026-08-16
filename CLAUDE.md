@@ -49,9 +49,14 @@ drift is silent — so the arrangement only holds because the agreement is
 | Golden position corpus | Legal moves, terminal status, winner on 10,000 positions | `tests/golden/positions.txt.gz` |
 | Golden evaluation corpus | Static evaluation, score for score, on the same 10,000 | `tests/golden/evals.txt.gz` |
 
-The Rust engine additionally reproduces perft(6) = 100,453,636 (cross-checked
-against Python, which needs 754s to Rust's 1.4s), perft(7) = 1,908,199,299, and
-the six tactical positions to depth 8.
+The Rust engine additionally reproduces perft(6) = 100,453,636 — cross-checked
+against the Python engine, which is the only reason that number is a contract
+rather than an assumption — plus perft(7) = 1,908,199,299 and the six tactical
+positions to depth 8.
+
+Move generation, measured on an idle machine: Python 327–380k leaves/s, Rust
+114–135M, so about **350x**. (Earlier figures of 98–133k and "551–813x" were
+taken while other jobs were running; see the note on benchmarking below.)
 
 If you change a rule, both engines change, and all three instruments are
 regenerated together (`python -m tools.golden`). If you change one and not the
@@ -94,8 +99,16 @@ engine read 3,300–6,000 nps and depth 5–6, which is 2–3x low: it was taken
 other work was running. A contended bench understates the slower engine most,
 because it is the one that needs the whole time budget to reach its depth.
 
-In a 200-game match at 500ms per move the Rust engine scored 95.0% (180-0-20),
-**+512 Elo [+447, +609]**, against this branch's v1.3.1 engine.
+In 200-game matches at 500ms per move, against both Python engines this
+repository has had:
+
+| Opponent | Result | Elo |
+|---|---|---|
+| v1.3.1 (the engine this branch replaced) | 180-0-20, 95.0% | **+512 [+447, +609]** |
+| v1.5 (the engine that was on `main`) | 168-0-32, 92.0% | **+424 [+372, +495]** |
+
+Neither Python engine won a single game out of 200. The ~88 Elo between the two
+rows is the v1.4/v1.5 work, and matches what those release notes claimed for it.
 
 **Nominal depth is not a fair currency between these two engines**, and reading
 a fixed-depth result as a strength comparison will mislead you. All three of
