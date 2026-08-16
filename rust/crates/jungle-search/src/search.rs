@@ -24,26 +24,9 @@ use jungle_eval::evaluate;
 use jungle_eval::params::PIECE_VALUES;
 
 use crate::ordering::{Heuristics, OrderedMoves};
+use crate::params::SearchParams;
 use crate::score::*;
 use crate::tt::{TranspositionTable, BOUND_EXACT, BOUND_LOWER, BOUND_UPPER};
-
-// --- tuning, carried over from config.py so the port stays comparable --------
-const NMP_REDUCTION: i32 = 2;
-const NMP_MIN_DEPTH: i32 = 3;
-const NMP_MIN_PIECES: u32 = 3;
-const LMR_MIN_DEPTH: i32 = 3;
-const LMR_MOVES_BEFORE: usize = 4;
-const ASPIRATION_DELTA: i32 = 50;
-const ASPIRATION_MIN_DEPTH: i32 = 4;
-const RFP_MARGIN: i32 = 120;
-const RFP_MAX_DEPTH: i32 = 4;
-const RAZOR_MARGIN: i32 = 300;
-const RAZOR_MAX_DEPTH: i32 = 2;
-const FUTILITY_MARGIN: i32 = 150;
-const FUTILITY_MAX_DEPTH: i32 = 2;
-const LMP_BASE: usize = 6;
-const DELTA_MARGIN: i32 = 200;
-const QUIESCENCE_MAX_PLY: i32 = 4;
 
 /// How often to look at the clock. Checking every node costs more than it saves.
 const CLOCK_INTERVAL: u64 = 2047;
@@ -91,6 +74,7 @@ pub struct SearchResult {
 pub struct Searcher {
     tt: TranspositionTable,
     heur: Heuristics,
+    params: SearchParams,
     nodes: u64,
     seldepth: usize,
     stopped: bool,
@@ -104,9 +88,16 @@ pub struct Searcher {
 
 impl Searcher {
     pub fn new(tt_megabytes: usize) -> Searcher {
+        Searcher::with_params(tt_megabytes, SearchParams::default())
+    }
+
+    /// A searcher with non-default tuning. Used by the A/B harness so two
+    /// configurations can play each other in one process.
+    pub fn with_params(tt_megabytes: usize, params: SearchParams) -> Searcher {
         Searcher {
             tt: TranspositionTable::new(tt_megabytes),
             heur: Heuristics::new(),
+            params,
             nodes: 0,
             seldepth: 0,
             stopped: false,
@@ -266,11 +257,11 @@ impl Searcher {
     /// Search one depth, narrowing the window around the previous score and
     /// widening on a fail.
     fn aspiration(&mut self, pos: &mut Position, depth: i32, previous: Option<i32>) -> i32 {
-        let Some(prev) = previous.filter(|_| depth >= ASPIRATION_MIN_DEPTH) else {
+        let Some(prev) = previous.filter(|_| depth >= self.params.aspiration_min_depth) else {
             return self.search_root(pos, depth, -INF, INF);
         };
 
-        let mut delta = ASPIRATION_DELTA;
+        let mut delta = self.params.aspiration_delta;
         let mut alpha = (prev - delta).max(-INF);
         let mut beta = (prev + delta).min(INF);
 
@@ -290,7 +281,7 @@ impl Searcher {
                 return score;
             }
             delta += delta / 2;
-            if delta > 4 * ASPIRATION_DELTA * 8 {
+            if delta > 32 * self.params.aspiration_delta {
                 return self.search_root(pos, depth, -INF, INF);
             }
         }
@@ -444,16 +435,17 @@ impl Searcher {
         if !is_pv && outside_mate_window {
             let eval = evaluate(pos, side);
             static_eval = Some(eval);
+            let p = self.params;
 
             // Reverse futility: so far ahead that giving up a few plies still
             // beats beta.
-            if depth <= RFP_MAX_DEPTH && eval - RFP_MARGIN * depth >= beta {
+            if p.use_rfp && depth <= p.rfp_max_depth && eval - p.rfp_margin * depth >= beta {
                 return eval;
             }
 
             // Razoring: so far behind that only a tactic saves us; let quiescence
             // decide whether one exists.
-            if depth <= RAZOR_MAX_DEPTH && eval + RAZOR_MARGIN < alpha {
+            if p.use_razoring && depth <= p.razor_max_depth && eval + p.razor_margin < alpha {
                 let q = self.quiesce(pos, alpha, beta, ply, 0);
                 if self.stopped {
                     return 0;
@@ -466,14 +458,15 @@ impl Searcher {
             // Null-move pruning. Withheld when the side to move is down to a
             // couple of pieces, where zugzwang-like positions make passing a
             // materially different proposition.
-            if allow_null
-                && depth >= NMP_MIN_DEPTH
-                && pos.alive_count(side) >= NMP_MIN_PIECES
+            if p.use_nmp
+                && allow_null
+                && depth >= p.nmp_min_depth
+                && pos.alive_count(side) >= p.nmp_min_pieces
                 && eval >= beta
             {
                 pos.make_null();
                 let null_score =
-                    -self.negamax(pos, depth - 1 - NMP_REDUCTION, -beta, -beta + 1, ply + 1, None, false);
+                    -self.negamax(pos, depth - 1 - p.nmp_reduction, -beta, -beta + 1, ply + 1, None, false);
                 pos.unmake_null();
                 if self.stopped {
                     return 0;
@@ -511,12 +504,16 @@ impl Searcher {
             // Forward pruning of late or hopeless quiet moves, once we already
             // have something to fall back on.
             if is_quiet && best_move.is_some() && !is_pv && outside_mate_window {
-                if quiets_tried >= LMP_BASE + (depth * depth) as usize {
+                let p = self.params;
+                if p.use_lmp && quiets_tried >= p.lmp_base + (depth * depth) as usize {
                     idx += 1;
                     continue;
                 }
                 if let Some(eval) = static_eval {
-                    if depth <= FUTILITY_MAX_DEPTH && eval + FUTILITY_MARGIN <= alpha {
+                    if p.use_futility
+                        && depth <= p.futility_max_depth
+                        && eval + p.futility_margin <= alpha
+                    {
                         idx += 1;
                         continue;
                     }
@@ -528,7 +525,19 @@ impl Searcher {
             // Late-move reductions. Never inside the principal variation, and
             // never for a capture -- reducing the moves that change material is
             // how a search talks itself out of a tactic.
-            if !is_pv && idx >= LMR_MOVES_BEFORE && depth >= LMR_MIN_DEPTH && is_quiet {
+            // A killer is a quiet move already known to refute something at this
+            // ply, so reducing it would search the one quiet move with evidence
+            // behind it *less* deeply than the ones without. Measured: leaving
+            // this out cost about 56 Elo at fixed depth 5 against the engine this
+            // one replaces, while looking like a harmless simplification.
+            let reducible = is_quiet
+                && (self.params.lmr_reduce_killers || !self.heur.is_killer(ply as usize, m));
+            if self.params.use_lmr
+                && !is_pv
+                && idx >= self.params.lmr_moves_before
+                && depth >= self.params.lmr_min_depth
+                && reducible
+            {
                 let r = (1 + (depth / 6) + (idx as i32 / 6)).min(depth - 2);
                 if r > 0 {
                     let reduced =
@@ -665,7 +674,7 @@ impl Searcher {
         }
 
         let stand_pat = evaluate(pos, side);
-        if qply >= QUIESCENCE_MAX_PLY {
+        if qply >= self.params.quiescence_max_ply {
             return stand_pat;
         }
         let mut best = stand_pat;
@@ -701,7 +710,7 @@ impl Searcher {
             // Python engine once compared a rank (1..8) against a centipawn
             // margin, which collapsed the test into "am I 200 behind?" and then
             // pruned every capture, free material included.
-            if stand_pat + victim_value + DELTA_MARGIN < alpha {
+            if stand_pat + victim_value + self.params.delta_margin < alpha {
                 continue;
             }
 

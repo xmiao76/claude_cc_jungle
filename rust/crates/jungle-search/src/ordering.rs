@@ -121,6 +121,17 @@ impl Heuristics {
         }
     }
 
+    /// Did this move cause a cutoff at this ply before?
+    ///
+    /// Used to hold late-move reductions back. A killer is a quiet move already
+    /// known to refute something here, so reducing it searches the one quiet move
+    /// with evidence behind it at a shallower depth than the ones without.
+    #[inline(always)]
+    pub fn is_killer(&self, ply: usize, mv: Move) -> bool {
+        ply < crate::score::MAX_PLY
+            && (self.killers[ply][0] == mv.0 || self.killers[ply][1] == mv.0)
+    }
+
     #[inline(always)]
     fn counter(&self, side: Color, prev: Option<Move>) -> u16 {
         match prev {

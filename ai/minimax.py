@@ -102,6 +102,12 @@ class AIPlayer:
         self._completed_root_moves = 0  # root moves finished in the current iteration
         self._start_time = 0.0
         self._time_limit = 0.0
+        # Optional node budget, checked alongside the clock. A node-limited search
+        # is deterministic and immune to what else the machine is doing, which is
+        # what makes an A/B comparison against a *differently paced* engine fair:
+        # nominal depth is not a common currency between two engines that prune
+        # differently, but nodes are. `None` means no limit.
+        self._node_limit: int | None = None
         self._stopped = False
         # Set from another thread to abort the search early (see `request_stop`).
         # A plain bool is enough: assignment and reads are atomic in CPython, and
@@ -247,6 +253,8 @@ class AIPlayer:
         # An external stop request unwinds the search through the same path as a
         # clock expiry, so every existing abort check honours it.
         if self._stop_requested:
+            return True
+        if self._node_limit is not None and self._nodes >= self._node_limit:
             return True
         return (time.perf_counter() - self._start_time) >= self._time_limit
 

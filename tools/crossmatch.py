@@ -123,6 +123,7 @@ def play_one(
     mode: str,
     budget_ms: int,
     depth: int,
+    nodes: int,
     max_moves: int,
     opening_seed: int,
     opening_plies: int,
@@ -134,7 +135,11 @@ def play_one(
 
     rust = RustEngine()
     rust.new_game()
-    limit = f"movetime {budget_ms}" if mode == "time" else f"depth {depth}"
+    limit = {
+        "time": f"movetime {budget_ms}",
+        "depth": f"depth {depth}",
+        "nodes": f"nodes {nodes}",
+    }[mode]
 
     py_color = Color.BLACK if rust_is_blue else Color.BLUE
     python = AIPlayer(py_color, 2, strong_config())
@@ -158,15 +163,21 @@ def play_one(
                 if mode == "time":
                     move = python.get_best_move(gs, time_budget_ms=budget_ms)
                 else:
-                    # Fixed depth, bypassing the difficulty presets so both
-                    # engines get exactly the same depth.
+                    # Fixed depth or fixed nodes, bypassing the difficulty presets
+                    # so both engines get exactly the same budget.
                     python._stop_requested = False
                     python._nodes = 0
                     python._start_time = time.perf_counter()
                     python._time_limit = 3600.0
+                    python._node_limit = nodes if mode == "nodes" else None
                     python._reset_search_heuristics()
                     python._tt.new_search()
-                    move = python._search_fixed_depth(gs, depth)
+                    if mode == "nodes":
+                        # Iterative deepening, so the budget is spent going as
+                        # deep as it will reach rather than capped at a depth.
+                        move = python._search_iterative_deepening(gs)
+                    else:
+                        move = python._search_fixed_depth(gs, depth)
                 if move is None:
                     break
             gs.apply_move(move)
@@ -177,8 +188,8 @@ def play_one(
 
 
 def _task(args):
-    (pair, swapped, mode, budget_ms, depth, max_moves, seed, plies) = args
-    winner = play_one(not swapped, mode, budget_ms, depth, max_moves, seed, plies)
+    (pair, swapped, mode, budget_ms, depth, nodes, max_moves, seed, plies) = args
+    winner = play_one(not swapped, mode, budget_ms, depth, nodes, max_moves, seed, plies)
     return (pair, swapped, winner)
 
 
@@ -200,9 +211,10 @@ def _tally(results):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Rust engine vs Python engine")
-    ap.add_argument("--mode", choices=["time", "depth"], default="time")
+    ap.add_argument("--mode", choices=["time", "depth", "nodes"], default="time")
     ap.add_argument("--budget", type=int, default=2000, help="per-move ms (time mode)")
     ap.add_argument("--depth", type=int, default=6, help="fixed depth (depth mode)")
+    ap.add_argument("--nodes", type=int, default=50_000, help="node budget (nodes mode)")
     ap.add_argument("--games", type=int, default=40)
     ap.add_argument("--max-moves", type=int, default=200)
     ap.add_argument("--opening-plies", type=int, default=6)
@@ -225,6 +237,7 @@ def main() -> int:
                     args.mode,
                     args.budget,
                     args.depth,
+                    args.nodes,
                     args.max_moves,
                     seed,
                     args.opening_plies,
@@ -242,7 +255,8 @@ def main() -> int:
     rust_wins, py_wins, draws = _tally(results)
     stats = match_statistics(rust_wins, py_wins, draws)
 
-    limit = f"{args.budget}ms" if args.mode == "time" else f"depth {args.depth}"
+    limit = {"time": f"{args.budget}ms", "depth": f"depth {args.depth}",
+             "nodes": f"{args.nodes} nodes"}[args.mode]
     if args.json:
         print(json.dumps({**stats, "mode": args.mode, "limit": limit, "elapsed_s": elapsed}, indent=2))
         return 0

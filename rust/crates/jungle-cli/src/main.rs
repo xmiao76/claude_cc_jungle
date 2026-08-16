@@ -4,18 +4,21 @@
 //!   `protocol`  line-based host, so another process can drive the engine
 //!   `bench`     node/depth benchmark
 //!   `perft`     move-generation fingerprint and speed
+//!   `match`     self-play A/B with Elo, confidence interval and SPRT
 //!
 //! The protocol exists so the Python strength harness can play this engine
 //! against the Python one without either having to import the other. It is
 //! deliberately tiny -- four commands -- because its only job is to let two
 //! engines share a board.
 
+mod matchrun;
+
 use std::io::{self, BufRead, Write};
 
 use jungle_core::position::Position;
 use jungle_core::types::{col_of, row_of, Color, Move};
 use jungle_core::{generate, perft, perft_divide};
-use jungle_search::{Limits, Searcher};
+use jungle_search::{Limits, SearchParams, Searcher};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -29,8 +32,29 @@ fn main() {
             let ms = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2000);
             run_bench(ms);
         }
+        Some("match") => {
+            if let Err(e) = run_match_cmd(&args[1..]) {
+                eprintln!("error: {e}");
+                std::process::exit(2);
+            }
+        }
         _ => {
-            eprintln!("usage: jungle <protocol|bench [ms]|perft [depth] [--divide]>");
+            eprintln!(
+                "usage: jungle <protocol | bench [ms] | perft [depth] [--divide] | match [opts]>\n\
+                 \n\
+                 match options:\n  \
+                   --a <k=v,...>     parameter overrides for engine A (default: shipped tuning)\n  \
+                   --b <k=v,...>     parameter overrides for engine B\n  \
+                   --b-baseline      engine B is every optional heuristic off\n  \
+                   --nodes N         node budget per move (default 25000)\n  \
+                   --movetime MS     use a clock instead of nodes (not reproducible)\n  \
+                   --games N         maximum games (default 1000)\n  \
+                   --threads N       worker threads (default: available parallelism)\n  \
+                   --openings N      random opening plies (default 6)\n  \
+                   --seed N          opening seed (default 20260815)\n  \
+                   --sprt e0:e1:a:b  sequential test, e.g. 0:5:0.05:0.05\n  \
+                   --hash MB         transposition table per engine (default 16)"
+            );
             std::process::exit(2);
         }
     }
@@ -232,4 +256,112 @@ fn run_bench(budget_ms: u64) {
         "\ntotal: {total_nodes} nodes in {total_time:.2}s = {:.0} nps",
         total_nodes as f64 / total_time.max(1e-9)
     );
+}
+
+/// `jungle match` — self-play A/B with Elo, confidence interval and SPRT.
+fn run_match_cmd(args: &[String]) -> Result<(), String> {
+    use matchrun::{elo_interval, run_match, sprt_llr, MatchConfig, Sprt, Tally};
+
+    let mut a = SearchParams::default();
+    let mut b = SearchParams::default();
+    let mut nodes = 25_000u64;
+    let mut movetime: Option<u64> = None;
+    let mut games = 1000usize;
+    let mut threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let mut openings = 6usize;
+    let mut seed = 20_260_815u64;
+    let mut hash = 16usize;
+    let mut sprt = None;
+
+    let value = |i: usize| -> Result<&String, String> {
+        args.get(i + 1)
+            .ok_or_else(|| format!("{} needs a value", args[i]))
+    };
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--a" => { a.apply_overrides(value(i)?)?; i += 2; }
+            "--b" => { b.apply_overrides(value(i)?)?; i += 2; }
+            "--b-baseline" => { b = SearchParams::baseline(); i += 1; }
+            "--nodes" => { nodes = value(i)?.parse().map_err(|_| "bad --nodes".to_string())?; i += 2; }
+            "--movetime" => { movetime = Some(value(i)?.parse().map_err(|_| "bad --movetime".to_string())?); i += 2; }
+            "--games" => { games = value(i)?.parse().map_err(|_| "bad --games".to_string())?; i += 2; }
+            "--threads" => { threads = value(i)?.parse().map_err(|_| "bad --threads".to_string())?; i += 2; }
+            "--openings" => { openings = value(i)?.parse().map_err(|_| "bad --openings".to_string())?; i += 2; }
+            "--seed" => { seed = value(i)?.parse().map_err(|_| "bad --seed".to_string())?; i += 2; }
+            "--hash" => { hash = value(i)?.parse().map_err(|_| "bad --hash".to_string())?; i += 2; }
+            "--sprt" => {
+                let parts: Vec<f64> = value(i)?.split(':').map(|p| p.parse().unwrap_or(f64::NAN)).collect();
+                if parts.len() != 4 || parts.iter().any(|v| v.is_nan()) {
+                    return Err("--sprt wants elo0:elo1:alpha:beta".into());
+                }
+                sprt = Some(Sprt::new(parts[0], parts[1], parts[2], parts[3]));
+                i += 2;
+            }
+            other => return Err(format!("unknown option {other:?}")),
+        }
+    }
+
+    if a == b {
+        eprintln!("note: A and B are identical; this is an A/A run and should come out even.");
+    }
+
+    let limits = match movetime {
+        Some(ms) => Limits::movetime(ms),
+        None => Limits::nodes(nodes),
+    };
+    let budget = match movetime {
+        Some(ms) => format!("{ms}ms/move (not reproducible)"),
+        None => format!("{nodes} nodes/move"),
+    };
+
+    println!("Match: A vs B | {budget} | games<={games} threads={threads} seed={seed}");
+    if let Some(ref s) = sprt {
+        println!("SPRT: H0 elo<={} H1 elo>={} bounds [{:.2}, {:.2}]", s.elo0, s.elo1, s.lower, s.upper);
+    }
+    println!("{}", "-".repeat(70));
+
+    let start = std::time::Instant::now();
+    let reported = std::sync::atomic::AtomicUsize::new(0);
+    let cfg = MatchConfig {
+        a, b, games, opening_plies: openings, seed,
+        max_moves: 250, threads, tt_megabytes: hash, limits, sprt,
+    };
+
+    let tally = run_match(&cfg, |t: &Tally| {
+        let n = t.games() as usize;
+        if n % 50 == 0 && reported.swap(n, std::sync::atomic::Ordering::Relaxed) != n {
+            let (elo, lo, hi) = elo_interval(t);
+            println!("  {n:>5} games  W{}-L{}-D{}  {:.1}%  Elo {elo:+.0} [{lo:+.0}, {hi:+.0}]",
+                     t.a_wins, t.b_wins, t.draws, t.score() * 100.0);
+        }
+    });
+
+    let (elo, lo, hi) = elo_interval(&tally);
+    println!("{}", "-".repeat(70));
+    println!("A wins   : {}", tally.a_wins);
+    println!("B wins   : {}", tally.b_wins);
+    println!("draws    : {}", tally.draws);
+    println!("games    : {}", tally.games());
+    println!("A score  : {:.1}%", tally.score() * 100.0);
+    println!("Elo      : {elo:+.0} [{lo:+.0}, {hi:+.0}]");
+
+    if let Some(ref s) = cfg.sprt {
+        let llr = sprt_llr(&tally, s.elo0, s.elo1);
+        let verdict = match s.verdict(&tally) {
+            Some(true) => "H1 ACCEPTED - A is better",
+            Some(false) => "H0 accepted - A is not better",
+            None => "inconclusive - neither bound reached",
+        };
+        println!("LLR      : {llr:+.2}  ->  {verdict}");
+    } else if lo > 0.0 {
+        println!("verdict  : A is stronger (95% CI excludes parity)");
+    } else if hi < 0.0 {
+        println!("verdict  : A is WEAKER (95% CI excludes parity)");
+    } else {
+        println!("verdict  : inconclusive - CI spans parity");
+    }
+    println!("elapsed  : {:.1}s", start.elapsed().as_secs_f64());
+    Ok(())
 }

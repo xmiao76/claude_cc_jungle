@@ -108,6 +108,9 @@ REM in ai\native.py so the game degrades gracefully without it, and naming it
 REM explicitly guarantees PyInstaller bundles it rather than deciding it is
 REM optional. --noupx because UPX corrupts some native binaries, and a corrupted
 REM extension here would fail its import and silently drop us to the slow engine.
+REM --exclude-module numpy: a pygame hook drags numpy in for surfarray/sndarray,
+REM which nothing in the shipped import graph touches. It costs about 11 MB of
+REM the download for nothing.
 echo [5/7] Packaging with PyInstaller...
 %PY% -m PyInstaller ^
     --onefile ^
@@ -119,6 +122,7 @@ echo [5/7] Packaging with PyInstaller...
     --icon "gui\assets\tiles\icon.ico" ^
     --add-data "gui\assets;gui\assets" ^
     --hidden-import jungle_native ^
+    --exclude-module numpy ^
     main.py
 
 if errorlevel 1 (

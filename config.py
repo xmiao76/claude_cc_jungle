@@ -107,10 +107,14 @@ AI_TIME_HARD_MS = 2000   # iterative deepening time budget for Hard
 AI_FIXED_DEPTH_CAP_MS = 5000
 
 DIFFICULTY_LABELS = ["Easy", "Medium", "Hard"]
+# Easy and Medium are the same depths the previous engine used, and measure as
+# the same strength (51% over 100 games at depth 3). What changed is that they
+# now return instantly instead of pausing. Hard is the full engine on the clock
+# and reaches depth 16-25 where the previous one reached 6-7.
 DIFFICULTY_SUBTEXT = [
     "3-ply search · instant",
-    "5-ply search · ~0.5s",
-    "iterative · ~2s",
+    "5-ply search · instant",
+    "full engine · ~2s",
 ]
 
 USE_OPENING_BOOK = True

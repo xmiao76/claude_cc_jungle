@@ -4,23 +4,86 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A Windows desktop implementation of the Jungle (Dou Shou Qi) board game, built with Python and Pygame. Supports human-vs-AI and AI-vs-AI modes with three difficulty levels.
+A Windows desktop implementation of the Jungle (Dou Shou Qi) board game. The GUI
+is Python and Pygame; **the engine is Rust**, in `rust/`, exposed to Python as a
+compiled extension. Supports human-vs-AI and AI-vs-AI modes with three difficulty
+levels.
+
+The Python engine in `engine/` and `ai/` still exists and still works. It is no
+longer what plays: it is the oracle the Rust engine is verified against, and the
+fallback when the extension has not been built. See **Two engines, on purpose**
+below before changing either.
 
 ## Common Commands
 
 | Task | Command |
 |------|---------|
 | Run game (dev) | `python main.py` |
-| Run all tests | `pytest tests/ -v --tb=short -q` |
-| Run single test file | `pytest tests/test_rules.py -v` |
-| Run with coverage | `pytest tests/ -v --cov=. --cov-report=term-missing` |
-| Build release `.exe` | `build.bat` (runs tests, then PyInstaller) |
-| Lint | `ruff check .` |
-| Format | `ruff format .` |
+| Build the engine | `cd rust && cargo build --release -p jungle-py` then copy `rust\target\release\jungle_native.dll` to `jungle_native.pyd` |
+| Run all Python tests | `pytest tests/ -v --tb=short -q` |
+| Run all Rust tests | `cd rust && cargo test --release` |
+| Rust tests incl. slow ones | `cd rust && cargo test --release -- --ignored` |
+| Engine bench | `cd rust && cargo run --release -p jungle-cli --bin jungle -- bench 2000` |
+| Perft | `cd rust && cargo run --release -p jungle-cli --bin jungle -- perft 6` |
+| Rust vs Python match | `python -m tools.crossmatch --mode time --budget 500 --games 200 --jobs 4` |
+| Python-only A/B | `python -m tools.strength_harness selfplay --a strong --b baseline --games 200` |
+| Regenerate the golden corpus | `python -m tools.golden` |
+| Build release `.exe` | `build.bat` |
+| Lint | `ruff check .` and `cd rust && cargo clippy --all-targets` |
 
-The build script activates `venv\Scripts\activate.bat`, runs tests, cleans `build/` and `dist/`, runs PyInstaller with `--onefile --windowed`, and copies the result to `release\jungle_game.exe`.
+`build.bat` builds and verifies the extension, runs the Rust suite, runs the
+Python suite, then packages with PyInstaller. It **fails if cargo is missing**
+rather than silently packaging the Python fallback, which is ~500 Elo weaker
+with nothing in the running game to say so.
+
+## Two engines, on purpose
+
+There are two complete implementations of the rules in this repository, and that
+is deliberate. It is normally a bad idea — two rule sets drift apart and the
+drift is silent — so the arrangement only holds because the agreement is
+*continuously measured*, by three instruments that must all stay green:
+
+| Instrument | What it pins | Where |
+|---|---|---|
+| Frozen perft counts | Move generation, exhaustively | `tests/test_perft.py`, `rust/crates/jungle-core/tests/perft.rs` |
+| Golden position corpus | Legal moves, terminal status, winner on 10,000 positions | `tests/golden/positions.txt.gz` |
+| Golden evaluation corpus | Static evaluation, score for score, on the same 10,000 | `tests/golden/evals.txt.gz` |
+
+The Rust engine additionally reproduces perft(6) = 100,453,636 (cross-checked
+against Python, which needs 754s to Rust's 1.4s), perft(7) = 1,908,199,299, and
+the six tactical positions to depth 8.
+
+If you change a rule, both engines change, and all three instruments are
+regenerated together (`python -m tools.golden`). If you change one and not the
+other, the tests say so and name the position.
 
 ## Architecture
+
+### The Rust engine (`rust/`)
+
+A cargo workspace of five crates:
+
+- **`jungle-core`** — board representation, rules, move generation, perft.
+  Dependency-free. 7×9 = **63 squares fits in a `u64`**, so every terrain mask,
+  adjacency set and jump path is one word. All sixteen pieces are unique, so the
+  piece list is a flat `[Square; 16]` indexed by piece — no scanning, no
+  duplicate handling, and the whole position is about a hundred bytes.
+- **`jungle-eval`** — static evaluation, a verbatim port of `ai/evaluator.py`.
+  Deliberately not retuned: a port that changes behaviour cannot be verified as
+  a port.
+- **`jungle-search`** — negamax PVS, transposition table, move ordering, SEE,
+  quiescence, time management.
+- **`jungle-cli`** — dev tooling: a line protocol for cross-engine matches,
+  `bench`, `perft`. Not shipped.
+- **`jungle-py`** — the PyO3 extension, built as `jungle_native.pyd`.
+
+Measured against the Python engine on its own bench positions at a 2s budget:
+**depth 16–17 versus depth 6–7**, and ~2.7M nodes/sec versus ~6k. In a 200-game
+match at 500ms per move it scored 95.0% (180-0-20), **+512 Elo [+447, +609]**.
+
+At *equal depth* the two engines are statistically indistinguishable (51.0%,
++7 Elo [-57, +71] over 100 games at depth 3), which is the evidence that the
+port changed speed and not judgement.
 
 ### Layering
 
@@ -53,6 +116,18 @@ The codebase is split into four layers:
 - **Move representation**: `Move` is a `NamedTuple` of `(fc, fr, tc, tr, captured)`. `captured` stores the piece ID of the taken piece (0 if none).
 - **AI threading**: The AI search runs in a daemon thread so the UI stays responsive, and posts a custom pygame event (`config.AI_MOVE_EVENT_TYPE`) back to the main thread. Three things make that safe, and all three matter: the event carries a **generation token** that `_on_ai_move` checks (a result for a position we have left is discarded — applying one silently corrupts the grid, the Zobrist hash and the piece index); the thread body is wrapped in `try/except` (a crashed search used to post nothing and leave the game stuck in `AI_THINKING` forever, invisibly under `--windowed`); and `AIPlayer.request_stop()` lets the controller abort a search on Escape / new game / undo. `_on_ai_move` also validates the move against the current legal moves before applying it.
 - **Engine feature config**: Every search/eval enhancement is gated by a flag on `ai/search_config.py:SearchConfig`, threaded through `AIPlayer(color, difficulty, cfg)` and into `evaluate(state, color, cfg)`. Per-instance, not global, so the harness can run two configs in one process.
+- **The recorded per-flag Elo numbers are not trustworthy.** Seven of the eight
+  A/B results quoted in `ai/search_config.py` were run at 40 games, where the 95%
+  confidence interval is about ±100 Elo. Put back through this repo's own
+  `tools.strength_harness.match_statistics`, only `use_hanging` (-255,
+  [-425,-151]) excludes parity; `use_lmr_guards` and `use_tt_aging` at "+80" are
+  [-16,+189], and `use_tuned_piece_values` at "-44" is [-145,+50]. So the shipped
+  flag set is partly arbitrary, and several rejected ideas may well be fine. The
+  *combined* effect is real and was measured properly: `strong` vs `baseline` is
+  +171 Elo [+120,+229] over 200 games. Re-test individual flags before treating
+  any of them as settled — with the native engine a properly powered match is
+  minutes, not an overnight job, which is what made them underpowered in the
+  first place.
 - **Measure, do not assume.** This is the most important convention in the repo. Plausible-sounding improvements lost strength here more often than they gained it: a Rat-premium value table (-44 Elo), BFS true-distance-to-den (-70), a *corrected* jump-readiness test (-98), and static hanging-piece detection (-255, decisive) were all implemented and all measured worse than their absence. Root-move ordering by the previous iteration's scores came out at exactly 0. What did work: LMR guards (+80), TT aging (+80), side-keyed history with malus (+53). Everything that ships off is listed in `DISABLED_BY_MEASUREMENT` with its numbers in the `SearchConfig` docstring, and `test_strong_enables_every_proven_flag` fails if a flag is added without a recorded measurement. Gate any new idea behind a flag and run:
   `python -m tools.strength_harness selfplay --a strong --b <control> --games 200 --budget 250 --jobs 8`
   Read the verdict line, not the percentage: at 40 games one standard error is about 8 points, so a 55% result is not a result.
@@ -98,6 +173,14 @@ Two safety nets are worth knowing before changing the engine:
 | `gui/input_handler.py` | mouse → board action translation |
 | `gui/audio.py` | sound effects with mute toggle |
 | `generate_assets.py` | procedural art generation for pieces/tiles |
+| `ai/native.py` | the native engine wearing the `AIPlayer` interface, plus `make_ai_player` (native, falling back to Python) and the `AIEngine` protocol |
+| `rust/crates/jungle-core/` | rules, bitboards, move generation, Zobrist, perft — dependency-free |
+| `rust/crates/jungle-eval/` | static evaluation, ported verbatim from `ai/evaluator.py` |
+| `rust/crates/jungle-search/` | negamax PVS, transposition table, ordering, SEE, quiescence, time management |
+| `rust/crates/jungle-cli/` | dev-only: line protocol for cross-engine play, bench, perft |
+| `rust/crates/jungle-py/` | PyO3 bindings, built as `jungle_native.pyd` |
+| `tools/golden.py` | generates the golden position and evaluation corpora |
+| `tools/crossmatch.py` | dev-only: Rust vs Python matches, at equal time or equal depth |
 | `tools/strength_harness.py` | dev-only: self-play A/B match with Elo/CI/LOS, node/depth bench, perft (not bundled) |
 | `tools/perft.py` | dev-only: exhaustive leaf counts — the move-generation contract |
 | `tools/positions.py` | dev-only: hash-correct position builders shared by tests and harness |
