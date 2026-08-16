@@ -92,6 +92,17 @@ pub const fn weakening_traps(color_index: usize) -> Bitboard {
     }
 }
 
+/// The traps around this colour's *own* den — where an enemy piece stands at
+/// rank 0, one step from entering.
+#[inline(always)]
+pub const fn home_traps(color_index: usize) -> Bitboard {
+    if color_index == 0 {
+        TRAPS_BLUE
+    } else {
+        TRAPS_BLACK
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Adjacency
 // ---------------------------------------------------------------------------

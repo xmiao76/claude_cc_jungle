@@ -27,6 +27,7 @@ from engine.pieces import Color
 from tests.helpers import assert_board_consistent
 from tools.golden import (
     CORPUS_PATH,
+    EVALS_PATH,
     decode_board,
     decode_position,
     encode_board,
@@ -107,6 +108,33 @@ def test_board_encoding_round_trips_for_the_start_position():
     text = encode_board(gs.board)
     assert len(text) == 63
     assert decode_board(text).hash == gs.board.hash
+
+
+def test_recorded_evaluations_are_not_stale(corpus):
+    """The evaluation corpus must still match what the evaluator produces.
+
+    Without this, changing an evaluation weight would leave `evals.txt.gz`
+    describing an engine that no longer exists, and the Rust differential test
+    would start failing against a stale oracle rather than reporting a real
+    divergence. This is the check that says which side is wrong.
+    """
+    from ai.evaluator import evaluate
+    from ai.search_config import strong_config
+
+    if not EVALS_PATH.exists():
+        pytest.fail(f"missing {EVALS_PATH}; regenerate with `python -m tools.golden`")
+
+    cfg = strong_config()
+    recorded = read(EVALS_PATH)
+    assert len(recorded) == len(corpus), "evaluation corpus is out of step with positions"
+
+    for i, (pos_line, eval_line) in enumerate(zip(corpus, recorded, strict=True)):
+        board, stm, score = eval_line.split(" ")
+        assert pos_line.startswith(f"{board} {stm} "), f"line {i}: corpora disagree on position"
+        gs, _, _, _ = decode_position(pos_line)
+        assert evaluate(gs, Color.BLUE, cfg) == int(score), (
+            f"line {i}: recorded evaluation is stale for {board}"
+        )
 
 
 def test_corpus_covers_the_regimes_that_matter(corpus):

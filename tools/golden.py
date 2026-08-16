@@ -55,7 +55,9 @@ from engine.move_generator import generate_legal_moves
 from engine.pieces import Color, piece_id_color, piece_id_rank
 from engine.rules import WinResult
 
-CORPUS_PATH = Path(__file__).resolve().parent.parent / "tests" / "golden" / "positions.txt.gz"
+_GOLDEN_DIR = Path(__file__).resolve().parent.parent / "tests" / "golden"
+CORPUS_PATH = _GOLDEN_DIR / "positions.txt.gz"
+EVALS_PATH = _GOLDEN_DIR / "evals.txt.gz"
 
 FORMAT_VERSION = 1
 _EMPTY = "."
@@ -365,19 +367,60 @@ def collect(target: int = 10_000, seed: int = 20260815) -> list[str]:
     return lines[:target]
 
 
-def write(lines: list[str], path: Path = CORPUS_PATH) -> None:
+def _write_gz(path: Path, text: str) -> None:
+    """Write gzip deterministically.
+
+    `gzip.open` stamps the current time into the header, so regenerating an
+    identical corpus would still produce different bytes and show up as a diff.
+    Pinning mtime to 0 keeps a committed data file byte-stable.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    body = "\n".join(lines)
+    with open(path, "wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
+            gz.write(text.encode("ascii"))
+
+
+def write(lines: list[str], path: Path = CORPUS_PATH) -> None:
     header = f"# jungle-golden v{FORMAT_VERSION} positions={len(lines)}\n"
-    with gzip.open(path, "wt", encoding="ascii", newline="\n") as fh:
-        fh.write(header)
-        fh.write(body)
-        fh.write("\n")
+    _write_gz(path, header + "\n".join(lines) + "\n")
 
 
 def read(path: Path = CORPUS_PATH) -> list[str]:
     with gzip.open(path, "rt", encoding="ascii") as fh:
         return [ln.rstrip("\n") for ln in fh if ln.strip() and not ln.startswith("#")]
+
+
+# ---------------------------------------------------------------------------
+# Evaluation corpus
+# ---------------------------------------------------------------------------
+
+def collect_evals(lines: list[str] | None = None) -> list[str]:
+    """Score every corpus position with the shipped static evaluation.
+
+    A second oracle, for the layer above the rules. Move generation being
+    identical says nothing about whether two engines *judge* a position the same
+    way, and an evaluation port is easy to get subtly wrong -- a term computed
+    from the evaluating side rather than the piece's own colour still looks
+    plausible and still passes an antisymmetry check.
+
+    Only Blue's perspective is recorded: evaluation is antisymmetric, so Black's
+    score is the negation, and storing both would test nothing extra.
+    """
+    from ai.evaluator import evaluate
+    from ai.search_config import strong_config
+
+    cfg = strong_config()
+    out = []
+    for line in lines if lines is not None else read():
+        gs, _, _, _ = decode_position(line)
+        board, stm = line.split(" ", 2)[:2]
+        out.append(f"{board} {stm} {evaluate(gs, Color.BLUE, cfg)}")
+    return out
+
+
+def write_evals(lines: list[str], path: Path = EVALS_PATH) -> None:
+    header = f"# jungle-golden-evals v{FORMAT_VERSION} positions={len(lines)}\n"
+    _write_gz(path, header + "\n".join(lines) + "\n")
 
 
 if __name__ == "__main__":
@@ -392,3 +435,8 @@ if __name__ == "__main__":
     write(collected)
     size = CORPUS_PATH.stat().st_size
     print(f"wrote {len(collected)} positions to {CORPUS_PATH} ({size / 1024:.0f} KiB)")
+
+    evals = collect_evals(collected)
+    write_evals(evals)
+    size = EVALS_PATH.stat().st_size
+    print(f"wrote {len(evals)} evaluations to {EVALS_PATH} ({size / 1024:.0f} KiB)")
